@@ -1,0 +1,51 @@
+<!doctype html>
+<html lang="fr">
+<head>
+  <meta charset="utf-8">
+  <meta http-equiv="Content-Security-Policy"
+        content="default-src 'self'; script-src 'self'; style-src 'self' 'unsafe-inline'; img-src 'self' data: https: http:; font-src 'self'; frame-src about:; base-uri 'none'; form-action 'none'">
+  <meta name="viewport" content="width=device-width, initial-scale=1">
+  <title>MailHub</title>
+  <link rel="stylesheet" href="styles.css">
+</head>
+<body>
+  <div id="app">
+    <aside id="sidebar" aria-label="Comptes et dossiers">
+      <div class="sb-drag"></div>
+      <div class="sb-head">
+        <button id="btn-compose" class="primary wide">Écrire</button>
+      </div>
+      <nav id="sb-nav" class="sb-scroll"></nav>
+      <div class="sb-foot">
+        <button id="nav-rules" class="sb-link"></button>
+        <button id="nav-settings" class="sb-link"></button>
+      </div>
+    </aside>
+
+    <section id="list-pane" aria-label="Messages">
+      <header class="list-head">
+        <div class="list-title-row">
+          <h1 id="list-title">Boîte unifiée</h1>
+          <button id="btn-refresh" class="icon-btn" title="Actualiser" aria-label="Actualiser"></button>
+        </div>
+        <div class="search">
+          <span class="search-icon" id="search-icon"></span>
+          <input id="search" type="search" placeholder="Rechercher expéditeur ou objet" autocomplete="off" spellcheck="false">
+        </div>
+      </header>
+      <div id="selection-bar" class="selection-bar" hidden></div>
+      <div id="list-rows" class="rows" tabindex="0" role="listbox" aria-label="Liste des messages"></div>
+    </section>
+
+    <main id="reader" aria-label="Lecture"></main>
+
+    <section id="panel" hidden></section>
+  </div>
+
+  <div id="modal-root"></div>
+  <div id="toasts" role="status" aria-live="polite"></div>
+
+  <script src="icons.js"></script>
+  <script src="app.js"></script>
+</body>
+</html>
