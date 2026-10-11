@@ -1,0 +1,61 @@
+name: Installateurs MailHub
+
+# Lancer à la main (onglet Actions > Installateurs MailHub > Run workflow)
+# ou en poussant un tag de version, par exemple : git tag v1.0.0 && git push --tags
+on:
+  workflow_dispatch:
+  push:
+    tags: ['v*']
+
+jobs:
+  build:
+    strategy:
+      fail-fast: false
+      matrix:
+        include:
+          - os: windows-latest
+            script: dist:win
+            files: |
+              dist/*.exe
+          - os: macos-latest
+            script: dist:mac
+            files: |
+              dist/*.dmg
+    runs-on: ${{ matrix.os }}
+    steps:
+      - uses: actions/checkout@v4
+
+      - uses: actions/setup-node@v4
+        with:
+          node-version: 22
+          cache: npm
+
+      - run: npm ci
+
+      - run: npm test
+
+      # Sans certificat, les installateurs ne sont pas signés (voir README, section « Signature »).
+      - run: npm run ${{ matrix.script }}
+
+      - uses: actions/upload-artifact@v4
+        with:
+          name: installateur-${{ matrix.os }}
+          path: ${{ matrix.files }}
+          if-no-files-found: error
+
+  release:
+    if: startsWith(github.ref, 'refs/tags/v')
+    needs: build
+    runs-on: ubuntu-latest
+    permissions:
+      contents: write
+    steps:
+      - uses: actions/download-artifact@v4
+        with:
+          path: installateurs
+          merge-multiple: true
+
+      - uses: softprops/action-gh-release@v2
+        with:
+          files: installateurs/*
+          generate_release_notes: true
