@@ -8,7 +8,7 @@
   <title>MailHub</title>
   <link rel="stylesheet" href="styles.css">
 </head>
-<body>
+<body class="view-mail">
   <div id="app">
     <aside id="sidebar" aria-label="Comptes et dossiers">
       <div class="sb-drag"></div>
@@ -22,26 +22,36 @@
       </div>
     </aside>
 
-    <section id="list-pane" aria-label="Messages">
-      <header class="list-head">
-        <div class="list-title-row">
-          <h1 id="list-title">Boîte unifiée</h1>
-          <button id="btn-refresh" class="icon-btn" title="Actualiser" aria-label="Actualiser"></button>
-        </div>
-        <div class="search">
-          <span class="search-icon" id="search-icon"></span>
-          <input id="search" type="search" placeholder="Rechercher expéditeur ou objet" autocomplete="off" spellcheck="false">
-        </div>
-      </header>
-      <div id="selection-bar" class="selection-bar" hidden></div>
-      <div id="list-rows" class="rows" tabindex="0" role="listbox" aria-label="Liste des messages"></div>
-    </section>
+    <!-- Vue « messages » : liste + lecture, dans la disposition choisie -->
+    <div id="main" class="mode-right">
+      <section id="list-pane" aria-label="Messages">
+        <header class="list-head">
+          <div class="list-title-row">
+            <h1 id="list-title">Boîte unifiée</h1>
+            <div class="list-tools">
+              <div id="layout-switch" class="layout-switch" role="group" aria-label="Disposition de la lecture"></div>
+              <button id="btn-refresh" class="icon-btn" title="Actualiser" aria-label="Actualiser"></button>
+            </div>
+          </div>
+          <div class="search">
+            <span class="search-icon" id="search-icon"></span>
+            <input id="search" type="search" placeholder="Rechercher expéditeur ou objet" autocomplete="off" spellcheck="false">
+          </div>
+        </header>
+        <div id="selection-bar" class="selection-bar" hidden></div>
+        <div id="list-rows" class="rows" tabindex="0" role="listbox" aria-label="Liste des messages"></div>
+      </section>
 
-    <main id="reader" aria-label="Lecture"></main>
+      <div id="splitter" role="separator" tabindex="0" aria-label="Redimensionner la liste des messages" title="Glisser pour redimensionner, double-clic pour rétablir"></div>
 
-    <section id="panel" hidden></section>
+      <main id="reader" aria-label="Lecture"></main>
+    </div>
+
+    <!-- Vue « panneau » : règles, réglages, accueil -->
+    <section id="panel"></section>
   </div>
 
+  <div id="drag-hint" hidden></div>
   <div id="modal-root"></div>
   <div id="toasts" role="status" aria-live="polite"></div>
 

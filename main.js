@@ -8,7 +8,7 @@ const {
 
 const { Store } = require('./src/store');
 const { ImapManager, friendlyError } = require('./src/imap');
-const { senderRule, domainOf } = require('./src/rules');
+const tb = require('./src/thunderbird');
 
 let mainWindow = null;
 let store = null;
@@ -225,6 +225,9 @@ function registerIpc() {
   handle('rules:update', (rule) => store.updateRule(rule));
   handle('rules:remove', (id) => store.removeRule(id));
 
+  handle('rules:addMany', (list) => store.addRules(list));
+  handle('rules:move', (id, delta) => store.moveRule(id, delta));
+
   handle('rules:sortSender', async ({ accountId, folder, uids, from, dest, createRule, scope, moveExisting }) => {
     let moved = 0;
     if (uids && uids.length) {
@@ -233,14 +236,62 @@ function registerIpc() {
     }
     let rule = null;
     if (createRule && from) {
-      rule = store.addRule(senderRule({ accountId, from, folder: dest, scope }));
+      rule = store.upsertSenderRule({ accountId, from, folder: dest, scope }).rule;
     }
     if (moveExisting && from && dest !== folder) {
-      const query = scope === 'domain' ? `@${domainOf(from)}` : from;
-      const res = await manager.moveSimilar(accountId, folder, query, dest);
+      const res = await manager.moveSimilar(accountId, folder, from, dest, scope);
       moved += res.moved;
     }
     return { moved, rule };
+  });
+
+  // Glisser-déposer : une règle « cette adresse -> ce dossier » par expéditeur.
+  // Renvoie de quoi annuler (règle créée, ou ancien dossier d'une règle mise à jour).
+  handle('rules:autoSender', ({ accountId, senders, folder }) => {
+    const unique = [...new Set((senders || []).map((s) => String(s || '').toLowerCase().trim()).filter(Boolean))].slice(0, 20);
+    return unique.map((from) => {
+      const res = store.upsertSenderRule({ accountId, from, folder, scope: 'address' });
+      return { from, rule: res.rule, created: res.created, previousFolder: res.previousFolder, previousEnabled: res.previousEnabled };
+    });
+  });
+
+  // ---- import des filtres Thunderbird
+  const importable = new Set(); // seuls les fichiers trouvés ou choisis par l'utilisateur peuvent être lus
+
+  const describeFile = (file, extra = {}) => {
+    const filters = tb.parseFilterFile(tb.readFilterFile(file));
+    if (!filters.length) throw new Error('Ce fichier ne contient aucun filtre Thunderbird reconnu.');
+    importable.add(file);
+    return {
+      file,
+      server: path.basename(path.dirname(file)),
+      filters: filters.length,
+      suggestedAccountId: tb.suggestAccount(store.listAccounts(), tb.serverHints(filters), path.basename(path.dirname(file))),
+      ...extra,
+    };
+  };
+
+  handle('thunderbird:scan', () => tb.findFilterFiles().map((f) => describeFile(f.file, { profile: f.profile })));
+
+  handle('thunderbird:pick', async () => {
+    const root = tb.thunderbirdRoots().find((r) => fs.existsSync(r));
+    const { canceled, filePaths } = await dialog.showOpenDialog(mainWindow, {
+      title: 'Choisir un fichier de filtres Thunderbird',
+      defaultPath: root,
+      properties: ['openFile'],
+      filters: [{ name: 'Filtres Thunderbird (msgFilterRules.dat)', extensions: ['dat'] }, { name: 'Tous les fichiers', extensions: ['*'] }],
+    });
+    if (canceled || !filePaths.length) return null;
+    return describeFile(filePaths[0], { profile: '' });
+  });
+
+  handle('thunderbird:preview', async (file, accountId) => {
+    if (!importable.has(file)) throw new Error('Fichier non autorisé : choisissez-le de nouveau.');
+    const filters = tb.parseFilterFile(tb.readFilterFile(file));
+    const { folders, prefix } = await manager.listFolders(accountId);
+    return tb.buildPreview(filters, {
+      accountId, folders, prefix, existingRules: store.listRules().filter((r) => r.accountId === accountId),
+    });
   });
 
   handle('rules:applyToFolder', (accountId, folder) => manager.applyRulesToFolder(accountId, folder));

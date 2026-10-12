@@ -5,7 +5,7 @@ const { ImapFlow } = require('imapflow');
 const { simpleParser } = require('mailparser');
 const nodemailer = require('nodemailer');
 const MailComposer = require('nodemailer/lib/mail-composer');
-const { findRule } = require('./rules');
+const { findRule, senderRule, ruleMatches, domainOf } = require('./rules');
 
 // ---------------------------------------------------------------- utilitaires
 
@@ -50,6 +50,7 @@ function summarize(msg) {
     from: (from.address || '').toLowerCase(),
     fromName: from.name || '',
     to: (env.to || []).map((a) => a.address || '').join(', '),
+    cc: (env.cc || []).map((a) => a.address || '').join(', '),
     date: isoDate(env.date, msg.internalDate),
     size: msg.size || 0,
     seen: flags.has('\\Seen'),
@@ -58,9 +59,18 @@ function summarize(msg) {
   };
 }
 
+// mailparser renvoie un tableau quand l'en-tête apparaît plusieurs fois (To: a, puis To: b)
 function addrList(field) {
-  if (!field || !field.value) return [];
-  return field.value.map((a) => ({ name: a.name || '', address: a.address || '' }));
+  if (!field) return [];
+  const blocks = Array.isArray(field) ? field : [field];
+  const out = [];
+  for (const block of blocks) {
+    for (const a of (block && block.value) || []) {
+      if (a.group) a.group.forEach((g) => out.push({ name: g.name || '', address: g.address || '' }));
+      else out.push({ name: a.name || '', address: a.address || '' });
+    }
+  }
+  return out;
 }
 
 function inlineCids(html, attachments) {
@@ -362,13 +372,25 @@ class ImapManager extends EventEmitter {
     });
   }
 
-  /** Déplace tous les messages d'un expéditeur (ou d'un domaine) d'un dossier vers un autre. */
-  async moveSimilar(accountId, folder, from, dest) {
+  /**
+   * Déplace tous les messages d'un expéditeur (ou d'un domaine) d'un dossier vers un autre.
+   * La recherche IMAP « FROM » est une recherche de sous-chaîne (paul@acme.fr trouverait aussi
+   * bigpaul@acme.fr) : on revérifie donc chaque adresse avant de déplacer.
+   */
+  async moveSimilar(accountId, folder, from, dest, scope = 'address') {
     return this.withMailbox(accountId, folder, async (client) => {
-      const uids = await client.search({ from }, { uid: true });
-      if (!uids || !uids.length) return { moved: 0 };
-      await this._moveWithCreate(client, uids, dest);
-      return { moved: uids.length };
+      const probe = senderRule({ accountId, from, folder: dest, scope });
+      const needle = scope === 'domain' ? '@' + domainOf(from) : String(from).toLowerCase();
+      const found = await client.search({ from: needle }, { uid: true });
+      if (!found || !found.length) return { moved: 0 };
+      const exact = [];
+      for await (const msg of client.fetch(found.join(','), { uid: true, envelope: true }, { uid: true })) {
+        const s = summarize(msg);
+        if (ruleMatches(probe, s)) exact.push(s.uid);
+      }
+      if (!exact.length) return { moved: 0 };
+      await this._moveWithCreate(client, exact, dest);
+      return { moved: exact.length };
     });
   }
 

@@ -94,6 +94,9 @@ const state = {
   opened: null,       // { msg, detail, loading, error, allowRemote }
   rules: [],
   view: 'mail',       // mail | rules | settings | welcome
+  expanded: false,    // message ouvert en plein écran par double-clic
+  reading: false,     // le panneau de lecture occupe toute la zone
+  listScroll: 0,
 };
 
 let loadToken = 0;
@@ -459,8 +462,8 @@ function openNewFolderDialog(accountId, parentPath) {
 // ---------------------------------------------------------------- navigation
 
 async function selectFolder(accountId, folder) {
-  state.view = 'mail';
-  document.body.classList.remove('show-panel');
+  setView('mail');
+  state.expanded = false;
   state.current = { accountId, folder };
   state.query = '';
   $('#search').value = '';
@@ -478,10 +481,16 @@ function updateTitle() {
   $('#list-title').textContent = accountId === 'unified' ? 'Boîte unifiée' : folderLabel(accountId, folder);
 }
 
-function showPanel(view) {
+// Une seule source de vérité : la classe du body décide quelle vue est visible.
+// (Garder un drapeau séparé pour le panneau laissait l'écran d'accueil par-dessus la liste.)
+function setView(view) {
   state.view = view;
-  document.body.classList.add('show-panel');
-  $('#panel').hidden = false;
+  document.body.classList.toggle('view-mail', view === 'mail');
+  document.body.classList.toggle('view-panel', view !== 'mail');
+}
+
+function showPanel(view) {
+  setView(view);
   renderSidebar();
   if (view === 'rules') renderRulesPanel();
   else if (view === 'settings') renderSettingsPanel();
@@ -489,11 +498,138 @@ function showPanel(view) {
 }
 
 function showMail() {
-  state.view = 'mail';
-  document.body.classList.remove('show-panel');
-  $('#panel').hidden = true;
+  setView('mail');
   renderSidebar();
 }
+
+// ------------------------------------------------------------ disposition
+
+const LAYOUTS = [
+  { id: 'right', label: 'Lecture à côté de la liste', short: 'À côté de la liste', icon: 'layoutRight' },
+  { id: 'bottom', label: 'Lecture sous la liste', short: 'Sous la liste', icon: 'layoutBottom' },
+  { id: 'full', label: 'Lecture en plein écran', short: 'Plein écran', icon: 'layoutFull' },
+];
+const layoutPref = () => (LAYOUTS.some((l) => l.id === state.prefs.layout) ? state.prefs.layout : 'right');
+
+function applySizes() {
+  const main = $('#main');
+  if (state.prefs.listWidth) main.style.setProperty('--list-w', state.prefs.listWidth + 'px');
+  else main.style.removeProperty('--list-w');
+  if (state.prefs.listHeight) main.style.setProperty('--list-h', state.prefs.listHeight + 'px');
+  else main.style.removeProperty('--list-h');
+}
+
+function applyLayout() {
+  const pref = layoutPref();
+  if (!state.opened) state.expanded = false;
+  const reading = !!state.opened && (pref === 'full' || state.expanded);
+  const mode = pref === 'full' || reading ? 'full' : pref;
+  const rows = $('#list-rows');
+  if (reading && !state.reading) state.listScroll = rows.scrollTop; // la liste va être masquée
+  $('#main').className = `mode-${mode}` + (reading ? ' reading' : '');
+  if (!reading && state.reading) rows.scrollTop = state.listScroll;
+  state.reading = reading;
+  $('#splitter').setAttribute('aria-orientation', mode === 'bottom' ? 'horizontal' : 'vertical');
+  document.querySelectorAll('#layout-switch button').forEach((b) => b.setAttribute('aria-pressed', String(b.dataset.layout === pref)));
+}
+
+async function setLayout(id) {
+  try {
+    state.prefs = await call(api.prefs.set({ layout: id }));
+  } catch (err) { toast(err.message, { error: true }); return; }
+  state.expanded = false;
+  renderReader();
+}
+
+function closeReader() {
+  state.opened = null;
+  state.expanded = false;
+  renderList();
+  renderReader();
+}
+
+function renderLayoutSwitch() {
+  const box = $('#layout-switch');
+  clear(box);
+  LAYOUTS.forEach((l) => box.appendChild(h('button', {
+    title: l.label, 'aria-label': l.label, 'data-layout': l.id, 'aria-pressed': 'false',
+    on: { click: () => setLayout(l.id) },
+  }, ico(l.icon, 17))));
+}
+
+function initSplitter() {
+  const splitter = $('#splitter');
+  const main = $('#main');
+  const list = $('#list-pane');
+  const isBottom = () => main.classList.contains('mode-bottom');
+  const current = () => Math.round(isBottom() ? list.getBoundingClientRect().height : list.getBoundingClientRect().width);
+
+  const saveSize = debounce((patch) => {
+    api.prefs.set(patch).then((r) => { if (r.ok) state.prefs = r.data; });
+  }, 300);
+
+  function setSize(px, persist) {
+    const bottom = isBottom();
+    const box = main.getBoundingClientRect();
+    const min = bottom ? 140 : 280;
+    const max = Math.max(min, (bottom ? box.height : box.width) - (bottom ? 200 : 380));
+    const value = Math.round(Math.max(min, Math.min(max, px)));
+    main.style.setProperty(bottom ? '--list-h' : '--list-w', value + 'px');
+    if (persist) saveSize(bottom ? { listHeight: value } : { listWidth: value });
+  }
+
+  splitter.addEventListener('pointerdown', (e) => {
+    if (e.button !== 0) return;
+    e.preventDefault();
+    const bottom = isBottom();
+    const start = list.getBoundingClientRect();
+    try { splitter.setPointerCapture(e.pointerId); } catch { /* sans importance : les écouteurs sont sur window */ }
+    splitter.classList.add('dragging');
+    document.body.classList.add('resizing', bottom ? 'row' : 'col');
+    const move = (ev) => setSize(bottom ? ev.clientY - start.top : ev.clientX - start.left, false);
+    const stop = () => {
+      window.removeEventListener('pointermove', move, true);
+      window.removeEventListener('pointerup', stop, true);
+      window.removeEventListener('pointercancel', stop, true);
+      window.removeEventListener('mouseup', stop, true);
+      window.removeEventListener('blur', stop);
+      splitter.classList.remove('dragging');
+      document.body.classList.remove('resizing', 'row', 'col');
+      setSize(current(), true);
+    };
+    window.addEventListener('pointermove', move, true);
+    window.addEventListener('pointerup', stop, true);
+    window.addEventListener('pointercancel', stop, true);
+    window.addEventListener('mouseup', stop, true);
+    window.addEventListener('blur', stop);
+  });
+
+  splitter.addEventListener('keydown', (e) => {
+    const step = e.shiftKey ? 64 : 24;
+    const keys = isBottom() ? { ArrowUp: -step, ArrowDown: step } : { ArrowLeft: -step, ArrowRight: step };
+    if (!(e.key in keys)) return;
+    e.preventDefault();
+    setSize(current() + keys[e.key], true);
+  });
+
+  splitter.addEventListener('dblclick', () => {
+    const key = isBottom() ? 'listHeight' : 'listWidth';
+    api.prefs.set({ [key]: 0 }).then((r) => { if (r.ok) { state.prefs = r.data; applySizes(); } });
+  });
+}
+
+// Indication pendant un glisser-déposer
+function showDragHint(count) {
+  const hint = $('#drag-hint');
+  const what = count > 1 ? `Ces ${count} messages seront rangés` : 'Le message sera rangé';
+  hint.textContent = state.prefs.autoRuleOnDrop !== false
+    ? `${what} dans le dossier choisi, et les prochains messages de cette adresse iront aussi dedans.`
+    : `${what} dans le dossier choisi.`;
+  hint.hidden = false;
+}
+function hideDragHint() { $('#drag-hint').hidden = true; }
+document.addEventListener('dragend', hideDragHint);
+document.addEventListener('drop', hideDragHint, true);
 
 // ------------------------------------------------------------------ messages
 
@@ -573,13 +709,14 @@ function renderList() {
     const key = keyOf(m);
     const selected = state.sel.has(key);
     const row = h('div', {
-      class: 'row' + (m.seen ? '' : ' unread') + (selected ? ' selected' : ''),
+      class: 'row' + (m.seen ? '' : ' unread') + (selected ? ' selected' : '') + (unified ? ' has-acc' : ''),
       draggable: 'true', role: 'option', 'aria-selected': selected ? 'true' : 'false',
       vars: { '--acc': accColor(m.accountId) },
       on: {
         click: (e) => onRowClick(e, m),
+        dblclick: () => onRowDblClick(m),
         dragstart: (e) => onRowDrag(e, m, row),
-        dragend: () => row.classList.remove('dragging'),
+        dragend: () => { row.classList.remove('dragging'); hideDragHint(); },
       },
     },
     h('div', { class: 'from' }, h('span', { class: 'dot' }), h('span', { class: 'who' }, m.fromName || m.from || '(inconnu)')),
@@ -640,7 +777,19 @@ function onRowClick(e, m) {
     }
   }
   selectOnly(m);
+  // même message déjà ouvert (premier clic d'un double-clic) : on ne recharge pas
+  if (state.opened && keyOf(state.opened.msg) === key && !state.opened.error) { renderList(); return; }
   openMessage(m);
+}
+
+// Double-clic : le message passe en plein écran, quelle que soit la disposition
+function onRowDblClick(m) {
+  if (layoutPref() === 'full') return;
+  selectOnly(m);
+  state.expanded = true;
+  if (!state.opened || keyOf(state.opened.msg) !== keyOf(m)) { openMessage(m); return; }
+  renderList();
+  renderReader();
 }
 
 function selectOnly(m) {
@@ -655,6 +804,7 @@ function onRowDrag(e, m, row) {
   e.dataTransfer.setData('application/x-mailhub', JSON.stringify(keys));
   e.dataTransfer.effectAllowed = 'move';
   row.classList.add('dragging');
+  showDragHint(keys.length);
 }
 
 function handleDrop(e, accountId, path) {
@@ -663,11 +813,12 @@ function handleDrop(e, accountId, path) {
   const set = new Set(keys);
   const msgs = state.messages.filter((m) => set.has(keyOf(m)));
   if (!msgs.length) return;
+  hideDragHint();
   if (msgs.some((m) => m.accountId !== accountId)) {
     toast('Un message ne peut être rangé que dans un dossier du même compte.', { error: true });
     return;
   }
-  fileMessages(msgs, accountId, path, { offerRule: true });
+  fileMessages(msgs, accountId, path, { offerRule: true, drop: true });
 }
 
 async function toggleFlag(m) {
@@ -713,7 +864,8 @@ function afterRemoved(msgs) {
   keys.forEach((k) => state.sel.delete(k));
   if (openedKey && keys.has(openedKey)) {
     const next = state.messages[Math.min(firstIdx, state.messages.length - 1)];
-    if (next) { selectOnly(next); openMessage(next); } else { state.opened = null; }
+    if (next && !state.reading) { selectOnly(next); openMessage(next); }
+    else { state.opened = null; state.expanded = false; }
   }
   renderList();
   renderReader();
@@ -737,9 +889,66 @@ function ruleFor(accountId, from, dest) {
       (c.field === 'domain' && domainOf(from) === String(c.value).toLowerCase())));
 }
 
-async function fileMessages(msgs, accountId, dest, { offerRule } = {}) {
+const NO_AUTO_RULE = new Set(['\\Trash', '\\Drafts', '\\Sent', '\\Inbox']);
+
+// Pas de règle automatique vers la corbeille, les brouillons, les envoyés ou la boîte de réception :
+// « toujours jeter ce expéditeur » ne doit jamais se décider par un simple glisser.
+function autoRuleAllowed(accountId, dest) {
+  if (dest.toUpperCase() === 'INBOX') return false;
+  const f = folderInfo(accountId, dest);
+  return !(f && NO_AUTO_RULE.has(f.specialUse));
+}
+
+async function undoAutoRules(results, accountId) {
+  try {
+    for (const r of results) {
+      if (!r.rule) continue;
+      if (r.created) await call(api.rules.remove(r.rule.id));
+      else await call(api.rules.update({ ...r.rule, folder: r.previousFolder, enabled: r.previousEnabled !== false }));
+    }
+    state.rules = await call(api.rules.list());
+    if (state.view === 'rules') renderRulesPanel();
+    toast(results.length > 1 ? 'Règles annulées. Les messages déjà rangés restent à leur place.' : 'Règle annulée. Le message déjà rangé reste à sa place.');
+  } catch (err) { toast(err.message, { error: true }); }
+}
+
+function announceAutoRules(results, { accountId, dest, origin, base }) {
+  const label = folderLabel(accountId, dest);
+  const created = results.filter((r) => r.rule && r.created);
+  const updated = results.filter((r) => r.rule && !r.created && (r.previousFolder !== dest || r.previousEnabled === false));
+  const changed = [...created, ...updated];
+  if (!changed.length) {
+    toast(results.length === 1 ? `${base} Cette adresse était déjà rangée ici automatiquement.` : base);
+    return;
+  }
+  const actions = [{ label: changed.length > 1 ? 'Annuler les règles' : 'Annuler la règle', onClick: () => undoAutoRules(changed, accountId) }];
+  let text;
+  if (changed.length === 1) {
+    const r = changed[0];
+    text = r.created
+      ? `${base} Les prochains messages de ${r.from} iront aussi dedans.`
+      : `${base} Règle mise à jour : ${r.from} ira désormais dans « ${label} » (avant : « ${folderLabel(accountId, r.previousFolder)} »).`;
+    actions.push({
+      label: 'Ranger aussi les anciens',
+      onClick: async () => {
+        try {
+          const res = await call(api.rules.sortSender({ accountId, folder: origin, uids: [], from: r.from, dest, createRule: false, scope: 'address', moveExisting: true }));
+          toast(res.moved ? `${res.moved} ${plural(res.moved, 'ancien message rangé', 'anciens messages rangés')} dans « ${label} ».` : `Aucun autre message de ${r.from} dans ce dossier.`);
+          loadFolders(accountId);
+          if (res.moved) loadMessages({ silent: true });
+        } catch (err) { toast(err.message, { error: true }); }
+      },
+    });
+  } else {
+    text = `${base} ${changed.length} règles de tri enregistrées pour ces adresses.`;
+  }
+  toast(text, { actions, timeout: 14000 });
+}
+
+async function fileMessages(msgs, accountId, dest, { offerRule, drop } = {}) {
   const movable = msgs.filter((m) => m.folder !== dest);
   if (!movable.length) return;
+  const origin = movable[0].folder;
   try {
     for (const g of groupByFolder(movable)) await call(api.messages.move(g.accountId, g.folder, g.uids, dest));
   } catch (err) { toast(err.message, { error: true }); return; }
@@ -747,6 +956,20 @@ async function fileMessages(msgs, accountId, dest, { offerRule } = {}) {
   pushRecent(accountId, dest);
   afterRemoved(movable);
   loadFolders(accountId);
+
+  // glisser-déposer : la règle « cette adresse -> ce dossier » se crée toute seule
+  if (drop && state.prefs.autoRuleOnDrop !== false && autoRuleAllowed(accountId, dest)) {
+    const base = `${movable.length} ${plural(movable.length, 'message rangé', 'messages rangés')} dans « ${folderLabel(accountId, dest)} ».`;
+    try {
+      const results = await call(api.rules.autoSender({ accountId, senders: movable.map((m) => m.from), folder: dest }));
+      state.rules = await call(api.rules.list());
+      if (state.view === 'rules') renderRulesPanel();
+      announceAutoRules(results, { accountId, dest, origin, base });
+    } catch (err) {
+      toast(`${base} La règle de tri n’a pas pu être créée : ${err.message}`, { error: true });
+    }
+    return;
+  }
 
   const senders = new Set(movable.map((m) => m.from));
   const from = movable[0].from;
@@ -989,12 +1212,28 @@ function suggestFolders(m) {
 }
 
 function renderReader() {
+  applyLayout();
+  try {
+    renderReaderContent();
+  } catch (err) {
+    console.error(err);
+    const reader = $('#reader');
+    clear(reader);
+    reader.appendChild(h('div', { class: 'empty' }, h('h2', null, 'Affichage impossible'), h('p', null, err.message || String(err))));
+  }
+}
+
+function renderReaderContent() {
   const reader = $('#reader');
   clear(reader);
   const o = state.opened;
   if (!o) {
     reader.appendChild(h('div', { class: 'reader-empty' }, ico('mail', 40), h('div', null, 'Sélectionnez un message pour le lire')));
     return;
+  }
+  if (state.reading) {
+    reader.appendChild(h('div', { class: 'reader-back' },
+      h('button', { class: 'ghost', on: { click: closeReader } }, ico('back', 16), 'Retour à la liste')));
   }
   const m = o.msg;
   if (o.loading) { reader.appendChild(h('div', { class: 'loading' }, 'Ouverture du message…')); return; }
@@ -1138,8 +1377,14 @@ function openCompose(init = {}) {
 
 // ----------------------------------------------------------------------- règles
 
-const FIELD_LABEL = { from: 'l’expéditeur', to: 'le destinataire', subject: 'l’objet', domain: 'le domaine de l’expéditeur' };
-const OP_LABEL = { contains: 'contient', equals: 'est', endsWith: 'se termine par' };
+const FIELD_LABEL = {
+  from: 'l’expéditeur', to: 'le destinataire', cc: 'la copie (Cc)', tocc: 'le destinataire ou la copie',
+  subject: 'l’objet', domain: 'le domaine de l’expéditeur',
+};
+const OP_LABEL = {
+  contains: 'contient', notContains: 'ne contient pas', equals: 'est', notEquals: 'n’est pas',
+  startsWith: 'commence par', endsWith: 'se termine par',
+};
 
 function describeRule(r) {
   const parts = [];
@@ -1158,6 +1403,7 @@ function renderRulesPanel() {
     h('p', { class: 'lead' }, 'Chaque nouveau message qui arrive dans une boîte de réception est comparé à ces règles, puis rangé dans le dossier choisi. Les règles sont appliquées dans l’ordre de la liste, la première qui correspond l’emporte.'),
     h('div', { class: 'toolbar-row' },
       h('button', { class: 'primary', disabled: !state.accounts.length, on: { click: () => openRuleEditor() } }, ico('plus', 16), 'Nouvelle règle'),
+      h('button', { class: 'ghost', disabled: !state.accounts.length, on: { click: openThunderbirdImport } }, ico('download', 16), 'Importer depuis Thunderbird'),
       state.accounts.map((a) => h('button', { class: 'ghost', title: 'Range maintenant les 500 derniers messages de la boîte de réception', on: { click: () => applyRules(a.id, 'INBOX') } }, `Appliquer à ${a.name}`))));
 
   if (!state.rules.length) {
@@ -1166,7 +1412,7 @@ function renderRulesPanel() {
       h('p', null, 'Rangez un message dans un dossier depuis le bandeau de lecture, puis choisissez « Toujours ranger ici ». Vous pouvez aussi écrire une règle à la main.')));
   }
 
-  state.rules.forEach((r) => {
+  state.rules.forEach((r, i) => {
     const acc = accountById(r.accountId);
     const toggle = h('input', { type: 'checkbox', checked: r.enabled !== false, 'aria-label': 'Activer la règle', on: { change: async () => {
       try { const upd = { ...r, enabled: toggle.checked }; await call(api.rules.update(upd)); r.enabled = toggle.checked; }
@@ -1176,8 +1422,10 @@ function renderRulesPanel() {
       h('label', { class: 'switch' }, toggle, h('span')),
       h('div', { class: 'summary' },
         h('div', null, 'Si ', describeRule(r), ' → ', h('span', { class: 'dest' }, ico('folder', 14), folderLabel(r.accountId, r.folder))),
-        h('div', { class: 'meta' }, h('i'), acc ? acc.email : 'Compte supprimé')),
+        h('div', { class: 'meta' }, h('i'), acc ? acc.email : 'Compte supprimé', r.source === 'thunderbird' ? ` · filtre Thunderbird « ${r.name} »` : '')),
       h('div', { class: 'rule-actions' },
+        h('button', { class: 'icon-btn', title: 'Appliquer plus tôt', 'aria-label': 'Appliquer plus tôt', disabled: i === 0, on: { click: () => reorderRule(r, -1) } }, ico('up', 16)),
+        h('button', { class: 'icon-btn', title: 'Appliquer plus tard', 'aria-label': 'Appliquer plus tard', disabled: i === state.rules.length - 1, on: { click: () => reorderRule(r, 1) } }, ico('down', 16)),
         h('button', { class: 'icon-btn', title: 'Modifier', 'aria-label': 'Modifier', on: { click: () => openRuleEditor(r) } }, ico('pencil')),
         h('button', { class: 'icon-btn', title: 'Supprimer', 'aria-label': 'Supprimer', on: { click: async () => {
           if (!(await confirmDialog({ title: 'Supprimer cette règle ?', body: 'Les messages déjà rangés ne bougent pas.', confirm: 'Supprimer', danger: true }))) return;
@@ -1186,6 +1434,13 @@ function renderRulesPanel() {
         } } }, ico('trash')))));
   });
   panel.appendChild(inner);
+}
+
+async function reorderRule(rule, delta) {
+  try {
+    state.rules = await call(api.rules.move(rule.id, delta));
+    renderRulesPanel();
+  } catch (err) { toast(err.message, { error: true }); }
 }
 
 function openRuleEditor(existing) {
@@ -1207,9 +1462,9 @@ function openRuleEditor(existing) {
   const renderConds = () => {
     clear(condBox);
     rule.conditions.forEach((c, i) => {
-      const field = h('select', { on: { change: () => { c.field = field.value; } } }, Object.entries({ from: 'Expéditeur', to: 'Destinataire', subject: 'Objet', domain: 'Domaine de l’expéditeur' }).map(([v, l]) => h('option', { value: v }, l)));
+      const field = h('select', { on: { change: () => { c.field = field.value; } } }, Object.entries({ from: 'Expéditeur', to: 'Destinataire', cc: 'Copie (Cc)', tocc: 'Destinataire ou copie', subject: 'Objet', domain: 'Domaine de l’expéditeur' }).map(([v, l]) => h('option', { value: v }, l)));
       field.value = c.field;
-      const op = h('select', { on: { change: () => { c.op = op.value; } } }, Object.entries({ contains: 'contient', equals: 'est exactement', endsWith: 'se termine par' }).map(([v, l]) => h('option', { value: v }, l)));
+      const op = h('select', { on: { change: () => { c.op = op.value; } } }, Object.entries({ contains: 'contient', notContains: 'ne contient pas', equals: 'est exactement', notEquals: 'n’est pas', startsWith: 'commence par', endsWith: 'se termine par' }).map(([v, l]) => h('option', { value: v }, l)));
       op.value = c.op;
       const val = h('input', { type: 'text', value: c.value, placeholder: 'texte à rechercher', spellcheck: 'false', on: { input: () => { c.value = val.value; } } });
       condBox.appendChild(h('div', { class: 'cond' }, field, op, val,
@@ -1277,6 +1532,16 @@ async function renderSettingsPanel() {
     h('p', { class: 'lead' }, 'Apparence et comptes connectés.'),
     h('h3', null, 'Apparence'),
     h('div', { class: 'seg' }, themeBtn('auto', 'Automatique'), themeBtn('light', 'Clair'), themeBtn('dark', 'Sombre')),
+    h('h3', null, 'Lecture des messages'),
+    h('div', { class: 'seg' }, LAYOUTS.map((l) => h('button', { class: layoutPref() === l.id ? 'on' : '', on: { click: async () => { await setLayout(l.id); renderSettingsPanel(); } } }, l.short))),
+    h('p', { class: 'lead', style: 'margin:8px 0 0' }, 'Ce choix est aussi disponible en haut de la liste des messages. Un double-clic sur un message l’ouvre en plein écran, quelle que soit la disposition.'),
+    h('h3', null, 'Tri'),
+    h('label', { class: 'check' },
+      h('input', { type: 'checkbox', checked: state.prefs.autoRuleOnDrop !== false, on: { change: async (e) => {
+        try { state.prefs = await call(api.prefs.set({ autoRuleOnDrop: e.target.checked })); }
+        catch (err) { e.target.checked = !e.target.checked; toast(err.message, { error: true }); }
+      } } }),
+      h('span', null, 'Créer une règle de tri quand je glisse un message dans un dossier : les prochains messages de la même adresse y seront rangés automatiquement.')),
     h('h3', null, 'Démarrage'),
     h('label', { class: 'check' },
       h('input', { type: 'checkbox', checked: !!state.prefs.openAtLogin, on: { change: async (e) => {
@@ -1429,6 +1694,153 @@ function openAddAccount() {
   email.focus();
 }
 
+
+// ------------------------------------------------------ import Thunderbird
+
+async function openThunderbirdImport() {
+  if (!state.accounts.length) { toast('Ajoutez d’abord un compte.', { error: true }); return; }
+  let files = [];
+  let chosen = null;
+  const listBox = h('div', { style: 'display:grid;gap:8px' }, h('div', { class: 'loading', style: 'padding:0' }, 'Recherche de votre profil Thunderbird…'));
+  const accSel = h('select', null, state.accounts.map((a) => h('option', { value: a.id }, `${a.name} <${a.email}>`)));
+  const help = h('small', null);
+
+  const renderFiles = () => {
+    clear(listBox);
+    if (!files.length) {
+      listBox.appendChild(h('div', { class: 'notice info' }, 'Aucun profil Thunderbird trouvé à l’emplacement habituel. Choisissez le fichier vous-même.'));
+      help.textContent = 'Le fichier s’appelle msgFilterRules.dat. Dans Thunderbird : menu ≡, Aide, Plus d’informations de dépannage, Dossier du profil, Ouvrir le dossier. Il se trouve ensuite dans ImapMail, puis dans le dossier du serveur de votre compte.';
+      return;
+    }
+    files.forEach((f) => {
+      const radio = h('input', { type: 'radio', name: 'tbfile', checked: chosen === f, on: { change: () => {
+        chosen = f;
+        if (f.suggestedAccountId) accSel.value = f.suggestedAccountId;
+        dlg.buttons.next.disabled = false;
+      } } });
+      listBox.appendChild(h('label', { class: 'file-option' }, radio,
+        h('span', null, h('b', null, f.server), h('small', null, `${f.filters} ${plural(f.filters, 'filtre', 'filtres')}${f.profile ? ' · profil ' + f.profile : ''}`))));
+    });
+    help.textContent = 'Vous ne voyez pas le bon compte ? Choisissez le fichier msgFilterRules.dat vous-même.';
+  };
+
+  const pick = async () => {
+    try {
+      const f = await call(api.thunderbird.pick());
+      if (!f) return;
+      files = files.filter((x) => x.file !== f.file).concat(f);
+      chosen = f;
+      if (f.suggestedAccountId) accSel.value = f.suggestedAccountId;
+      renderFiles();
+      dlg.buttons.next.disabled = false;
+      dlg.error('');
+    } catch (err) { dlg.error(err.message); }
+  };
+
+  const dlg = openDialog({
+    title: 'Importer des filtres Thunderbird',
+    subtitle: 'MailHub lit le fichier de filtres de Thunderbird sans le modifier. Vous vérifiez la liste avant tout import.',
+    large: true,
+    body: [
+      listBox,
+      h('div', null, h('button', { class: 'ghost', on: { click: pick } }, ico('folder', 16), 'Choisir un fichier…')),
+      h('div', { class: 'field' }, h('label', null, 'Importer dans le compte'), accSel, help),
+    ],
+    buttons: [
+      { label: 'Annuler', onClick: (d) => d.close() },
+      { id: 'next', label: 'Voir les filtres', kind: 'primary', onClick: (d) => { if (!chosen) return; const file = chosen.file; d.close(); openImportPreview(file, accSel.value); } },
+    ],
+  });
+  dlg.buttons.next.disabled = true;
+
+  try {
+    files = await call(api.thunderbird.scan());
+    if (files.length === 1) { chosen = files[0]; if (chosen.suggestedAccountId) accSel.value = chosen.suggestedAccountId; dlg.buttons.next.disabled = false; }
+  } catch (err) { files = []; dlg.error(err.message); }
+  renderFiles();
+}
+
+async function openImportPreview(file, accountId) {
+  const acc = accountById(accountId);
+  const listBox = h('div', { class: 'loading', style: 'padding:0' }, 'Lecture des filtres et comparaison avec les dossiers de ce compte…');
+  const summary = h('div', { class: 'import-summary' });
+  const boxes = [];
+  let items = [];
+
+  const refresh = () => {
+    const n = boxes.filter((b) => b.checked).length;
+    dlg.buttons.go.textContent = n ? `Importer ${n} ${plural(n, 'règle', 'règles')}` : 'Rien à importer';
+    dlg.buttons.go.disabled = n === 0;
+  };
+
+  const dlg = openDialog({
+    title: 'Filtres à importer',
+    subtitle: `Vers ${acc.email}`,
+    large: true,
+    body: [summary, listBox],
+    buttons: [
+      { label: 'Annuler', onClick: (d) => d.close() },
+      {
+        id: 'go', label: 'Importer', kind: 'primary',
+        onClick: async (d, btn) => {
+          const chosenItems = items.filter((it, i) => boxes[i] && boxes[i].checked);
+          if (!chosenItems.length) return;
+          btn.disabled = true;
+          d.error('');
+          try {
+            const missing = [...new Set(chosenItems.filter((it) => it.folder.status === 'missing').map((it) => it.folder.path))];
+            for (const path of missing) {
+              try { await call(api.folders.create(accountId, path)); }
+              catch (err) { if (!/exist/i.test(err.message)) throw new Error(`Création du dossier « ${path} » impossible : ${err.message}`); }
+            }
+            if (missing.length) await loadFolders(accountId);
+            await call(api.rules.addMany(chosenItems.map((it) => it.rule)));
+            state.rules = await call(api.rules.list());
+            d.close();
+            showPanel('rules');
+            toast(`${chosenItems.length} ${plural(chosenItems.length, 'règle importée', 'règles importées')} depuis Thunderbird${missing.length ? `, ${missing.length} ${plural(missing.length, 'dossier créé', 'dossiers créés')}` : ''}.`);
+          } catch (err) { btn.disabled = false; d.error(err.message); }
+        },
+      },
+    ],
+  });
+  dlg.buttons.go.disabled = true;
+
+  try {
+    items = await call(api.thunderbird.preview(file, accountId));
+  } catch (err) { clear(listBox); listBox.className = ''; listBox.appendChild(h('div', { class: 'notice' }, err.message)); return; }
+
+  const ok = items.filter((it) => it.rule);
+  const dup = ok.filter((it) => it.duplicate).length;
+  const skipped = items.length - ok.length;
+  summary.textContent = `${items.length} ${plural(items.length, 'filtre trouvé', 'filtres trouvés')} : ${ok.length} ${plural(ok.length, 'reprenable', 'reprenables')}` +
+    (skipped ? `, ${skipped} ${plural(skipped, 'ignoré', 'ignorés')} (voir la raison sous chacun)` : '') + (dup ? `, dont ${dup} déjà ${plural(dup, 'présent', 'présents')}` : '') + '.';
+
+  listBox.className = 'import-list';
+  clear(listBox);
+  items.forEach((it, i) => {
+    const box = h('input', { type: 'checkbox', checked: !!it.rule && !it.duplicate, disabled: !it.rule, 'aria-label': `Importer ${it.name}`, on: { change: refresh } });
+    boxes[i] = box;
+    const detail = h('div', { class: 'detail' });
+    if (it.rule) {
+      detail.append('Si ', describeRule(it.rule), ' → ',
+        h('span', { class: 'chip' }, ico('folder', 13), it.folder.path),
+        it.folder.status === 'missing' ? h('span', { class: 'chip warn', style: 'margin-left:6px' }, 'dossier à créer') : null,
+        it.folder.status === 'approx' ? h('span', { class: 'chip', style: 'margin-left:6px' }, 'dossier retrouvé par son nom') : null,
+        it.rule.match === 'any' ? ' (au moins une condition)' : '');
+    } else {
+      detail.append(`Ignoré : ${it.skip}.`);
+    }
+    listBox.appendChild(h('label', { class: 'import-item' + (it.rule ? '' : ' skipped') },
+      box,
+      h('div', null,
+        h('div', { class: 'title' }, it.name || '(sans nom)', it.rule && it.rule.enabled === false ? h('span', { class: 'chip warn', style: 'margin-left:8px' }, 'désactivée') : null),
+        detail,
+        it.notes.map((n) => h('div', { class: 'detail' }, n)))));
+  });
+  refresh();
+}
+
 // --------------------------------------------------------------- événements
 
 const refreshAccount = debounce(async (accountId) => {
@@ -1462,6 +1874,7 @@ document.addEventListener('keydown', (e) => {
   const tag = (e.target.tagName || '').toLowerCase();
   if (['input', 'textarea', 'select'].includes(tag) || $('#modal-root').firstChild || state.view !== 'mail') return;
   if (e.metaKey || e.ctrlKey || e.altKey) return;
+  if (e.key === 'Escape') { if (state.reading) closeReader(); return; }
   const idx = state.opened ? state.messages.findIndex((m) => keyOf(m) === keyOf(state.opened.msg)) : -1;
   const go = (i) => {
     const m = state.messages[i];
@@ -1486,9 +1899,21 @@ document.addEventListener('keydown', (e) => {
   }
 });
 
+// Une erreur silencieuse laissait des zones vides : on la montre.
+window.addEventListener('error', (e) => {
+  if (/ResizeObserver/.test(e.message || '')) return;
+  toast(`Erreur d’affichage : ${e.message}`, { error: true });
+});
+window.addEventListener('unhandledrejection', (e) => {
+  toast(`Erreur : ${(e.reason && e.reason.message) || e.reason}`, { error: true });
+});
+
 // ----------------------------------------------------------------- démarrage
 
 (async function init() {
+  renderLayoutSwitch();
+  initSplitter();
+  applyLayout();
   $('#nav-rules').append(ico('rules'), h('span', null, 'Règles de tri'));
   $('#nav-settings').append(ico('gear'), h('span', null, 'Réglages'));
   $('#btn-refresh').appendChild(ico('refresh', 17));
@@ -1497,6 +1922,8 @@ document.addEventListener('keydown', (e) => {
 
   try {
     state.prefs = await call(api.prefs.get());
+    applySizes();
+    applyLayout();
     state.accounts = await call(api.accounts.list());
     state.rules = await call(api.rules.list());
   } catch (err) {

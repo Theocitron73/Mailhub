@@ -9,7 +9,10 @@ automatiquement les nouveaux messages dans vos dossiers.
 - **Récupération des dossiers existants** de chaque serveur (Boîte de réception, Envoyés, Corbeille, dossiers personnels et sous-dossiers).
 - **Création, renommage et suppression de dossiers** (bouton `+` d'un compte, ou clic droit sur un dossier).
 - **Tri en un geste** : ouvrez un message, cliquez sur un onglet du bandeau « Ranger dans », ou glissez-le sur un dossier. Un message vous propose alors « Toujours ranger ici » : les prochains messages de cet expéditeur (ou de tout son domaine) iront dans ce dossier, et les messages déjà reçus peuvent être rangés en même temps.
-- **Règles de tri** modifiables : expéditeur, destinataire, objet ou domaine, avec « toutes les conditions » ou « au moins une ».
+- **Glisser-déposer = règle automatique** : glissez un message sur un dossier, il est rangé et une règle « de cette adresse → ce dossier » est créée. Une bulle permet d'**annuler la règle** ou de **ranger aussi les anciens messages** de cette adresse. Si une règle existe déjà pour l'adresse, elle est mise à jour (jamais dupliquée). Aucune règle n'est créée vers la Corbeille, les Brouillons, les Envoyés ou la Boîte de réception. Désactivable dans Réglages.
+- **Disposition de lecture au choix**, comme Thunderbird : **à côté** de la liste, **en dessous**, ou **plein écran** (boutons au-dessus de la liste). Un double-clic sur un message l'ouvre en plein écran, quelle que soit la disposition ; `Échap` revient à la liste. La séparation se règle à la souris (double-clic pour rétablir) et la taille est mémorisée.
+- **Import des filtres Thunderbird** : Règles → « Importer depuis Thunderbird ». Le profil est trouvé automatiquement (ou choisissez un `msgFilterRules.dat`). Un aperçu indique quels filtres sont repris ; les dossiers manquants peuvent être créés ; les doublons sont détectés.
+- **Règles de tri** modifiables, avec ordre de priorité (la première règle qui correspond s'applique ; boutons « Appliquer plus tôt / plus tard ») : expéditeur, destinataire, objet ou domaine, avec « toutes les conditions » ou « au moins une ».
 - **Surveillance en temps réel** (IMAP IDLE) : les nouveaux messages sont triés dès leur arrivée. Le courrier reçu pendant que l'application était fermée est trié au démarrage suivant.
 - Lecture HTML sécurisée, pièces jointes, recherche, étoile, lu / non lu, suppression (vers la corbeille), réponse, transfert et envoi de messages (SMTP).
 - Thème clair, sombre ou automatique.
@@ -44,7 +47,7 @@ npm run dist:mac   # sur macOS    -> dist/MailHub-1.0.0-universal.dmg
 ```bash
 npm install
 npm start
-npm test   # tests du moteur de règles
+npm test   # moteur de règles + lecture des filtres Thunderbird
 ```
 
 ## Premier lancement : avertissements du système
@@ -73,6 +76,8 @@ Cliquez sur **Ajouter un compte**. Pour les fournisseurs courants (Gmail, iCloud
 - L'éditeur de messages écrit en **texte brut** (pas de mise en forme, pas de brouillons enregistrés).
 - Un message ne peut être rangé que dans un dossier **du même compte**.
 - Les messages de plus de 25 Mo ne sont pas affichés.
+
+- **Import Thunderbird** : seuls les filtres « déplacer vers un dossier » sont repris. Les critères sur le corps du message, la date, l'état, etc., et les autres actions (copier, étiqueter, transférer, supprimer…) sont signalés comme ignorés. Seuls les filtres de type « à l'arrivée » sont importés.
 
 ## Sécurité
 

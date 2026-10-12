@@ -2,6 +2,7 @@
 
 const fs = require('fs');
 const path = require('path');
+const { upsertSenderRule, newId } = require('./rules');
 
 /**
  * Stockage local : comptes, règles, préférences.
@@ -136,6 +137,33 @@ class Store {
   removeRule(id) {
     this.data.rules = this.data.rules.filter((r) => r.id !== id);
     this._save();
+  }
+
+  /** Ajoute plusieurs règles à la suite (import). */
+  addRules(list) {
+    const added = list.map((r) => ({ ...r, id: r.id || newId() }));
+    this.data.rules.push(...added);
+    this._save();
+    return added;
+  }
+
+  /** Règle « cet expéditeur va dans ce dossier » : création ou mise à jour, placée en tête. */
+  upsertSenderRule(params) {
+    const res = upsertSenderRule(this.data.rules, params);
+    if (res.rule) this._save();
+    return res;
+  }
+
+  /** Remonte (delta < 0) ou descend (delta > 0) une règle dans l'ordre d'application. */
+  moveRule(id, delta) {
+    const rules = this.data.rules;
+    const from = rules.findIndex((r) => r.id === id);
+    if (from < 0) return rules;
+    const to = Math.max(0, Math.min(rules.length - 1, from + delta));
+    const [rule] = rules.splice(from, 1);
+    rules.splice(to, 0, rule);
+    this._save();
+    return rules;
   }
 
   // ---- Préférences ----

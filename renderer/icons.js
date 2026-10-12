@@ -28,6 +28,13 @@
     more: '<circle cx="5" cy="12" r="1.2"/><circle cx="12" cy="12" r="1.2"/><circle cx="19" cy="12" r="1.2"/>',
     tag: '<path d="M3 12V4h8l10 10-8 8z"/><circle cx="7.5" cy="8.5" r="1.3"/>',
     pencil: '<path d="M4 20h4L19.5 8.5a2.1 2.1 0 0 0-3-3L5 17z"/><path d="m14.5 7.5 3 3"/>',
+    layoutRight: '<rect x="3" y="4.5" width="18" height="15" rx="2"/><path d="M10 4.5v15"/>',
+    layoutBottom: '<rect x="3" y="4.5" width="18" height="15" rx="2"/><path d="M3 11.5h18"/>',
+    layoutFull: '<rect x="3" y="4.5" width="18" height="15" rx="2"/><path d="M7.5 9.5h9M7.5 13h9M7.5 16h5"/>',
+    back: '<path d="M19 12H5"/><path d="m11 18-6-6 6-6"/>',
+    up: '<path d="m6 14 6-6 6 6"/>',
+    down: '<path d="m6 10 6 6 6-6"/>',
+    download: '<path d="M12 4v11"/><path d="m7 11 5 5 5-5"/><path d="M5 20h14"/>',
   };
 
   window.icon = function icon(name, size) {

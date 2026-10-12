@@ -44,9 +44,20 @@ contextBridge.exposeInMainWorld('mailhub', {
     add: (rule) => invoke('rules:add', rule),
     update: (rule) => invoke('rules:update', rule),
     remove: (id) => invoke('rules:remove', id),
+    addMany: (list) => invoke('rules:addMany', list),
+    move: (id, delta) => invoke('rules:move', id, delta),
     // « ranger cet expéditeur » : crée la règle, déplace le message et, au choix, l'existant
     sortSender: (payload) => invoke('rules:sortSender', payload),
+    // glisser-déposer : une règle par expéditeur, avec de quoi annuler
+    autoSender: (payload) => invoke('rules:autoSender', payload),
     applyToFolder: (accountId, folder) => invoke('rules:applyToFolder', accountId, folder),
+  },
+
+  // import des filtres Thunderbird
+  thunderbird: {
+    scan: () => invoke('thunderbird:scan'),
+    pick: () => invoke('thunderbird:pick'),
+    preview: (file, accountId) => invoke('thunderbird:preview', file, accountId),
   },
 
   // préférences
