@@ -681,6 +681,7 @@ class ImapManager extends EventEmitter {
       bcc: mail.bcc || undefined,
       subject: mail.subject || '',
       text: mail.text || '',
+      html: mail.html || undefined,
       inReplyTo: mail.inReplyTo || undefined,
       references: mail.references && mail.references.length ? mail.references : undefined,
       attachments: (mail.attachments || []).map((p) => ({ path: p })),

@@ -27,7 +27,15 @@ function cleanImage(im, { maxBytes = 1.5 * 1024 * 1024 } = {}) {
 function buildSignedMessage(text, block, images, html = '') {
   const imgs = (images || []).map((i) => cleanImage(i)).filter(Boolean);
   if (!imgs.length) return null;
-  if (block && String(text).indexOf(block) < 0) return null;
+
+  const normText = String(text || '').replace(/\r\n/g, '\n');
+  const normBlock = String(block || '').replace(/\r\n/g, '\n');
+  const normHtml = String(html || '');
+
+  const hasBlock = normBlock && normText.includes(normBlock);
+  const hasPlaceholder = normText.includes(PLACEHOLDER) || normHtml.includes(PLACEHOLDER) || normHtml.includes('data-sig="1"');
+
+  if (normBlock && !hasBlock && !hasPlaceholder) return null;
 
   const attachments = imgs.map((im, i) => {
     const m = IMG_RE.exec(im.dataUrl);
@@ -36,7 +44,7 @@ function buildSignedMessage(text, block, images, html = '') {
   });
   const imgHtml = imgs.map((im, i) => `<img src="cid:sig${i}@mailhub" width="${im.width}" alt="" style="max-width:100%;height:auto;display:block;margin:6px 0">`).join('');
 
-  let newHtml = html;
+  let newHtml = normHtml;
   if (newHtml) {
     if (newHtml.includes(PLACEHOLDER)) {
       newHtml = newHtml.replace(PLACEHOLDER, imgHtml);
@@ -49,23 +57,28 @@ function buildSignedMessage(text, block, images, html = '') {
       newHtml += `<div class="sig-block" data-sig="1"><br><br>${imgHtml}</div>`;
     }
   } else {
-    const at = block ? String(text).indexOf(block) : -1;
-    const before = at >= 0 ? text.slice(0, at) : text;
-    const after = at >= 0 ? text.slice(at + block.length) : '';
+    const at = normBlock ? normText.indexOf(normBlock) : -1;
+    const before = at >= 0 ? normText.slice(0, at) : normText;
+    const after = at >= 0 ? normText.slice(at + normBlock.length) : '';
     const box = 'font-family:system-ui,-apple-system,Segoe UI,sans-serif;font-size:14px;white-space:pre-wrap';
-    const cleanBlock = block ? block.replace(PLACEHOLDER, '') : '';
+    const cleanBlock = normBlock ? normBlock.replace(PLACEHOLDER, '') : '';
     newHtml = `<div style="${box}">${esc(before + cleanBlock)}</div><div>${imgHtml}</div>` + (after.trim() ? `<div style="${box}">${esc(after)}</div>` : '');
   }
 
-  const atText = block ? String(text).indexOf(block) : -1;
-  let newText = text;
-  const plainBlock = block ? block.replace(PLACEHOLDER, '').replace(/\n-- \n\s*$/, '') : '';
+  let atText = normBlock ? normText.indexOf(normBlock) : -1;
+  if (atText < 0 && normText.includes(PLACEHOLDER)) {
+    atText = normText.indexOf(PLACEHOLDER);
+  }
+
+  let newText = normText;
+  const plainBlock = normBlock ? normBlock.replace(PLACEHOLDER, '').replace(/\n-- \n\s*$/, '') : '';
   if (atText >= 0) {
-    const before = text.slice(0, atText);
-    const after = text.slice(atText + block.length);
+    const before = normText.slice(0, atText);
+    const matchLen = normBlock ? normBlock.length : PLACEHOLDER.length;
+    const after = normText.slice(atText + matchLen);
     newText = before + plainBlock + after;
   } else if (plainBlock) {
-    newText = text + '\n' + plainBlock;
+    newText = normText + '\n' + plainBlock;
   }
   newText = newText.replace(PLACEHOLDER, '').trim();
 
