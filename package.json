@@ -90,7 +90,7 @@
       "artifactName": "MailHub-${version}-${arch}.${ext}"
     },
     "dmg": {
-      "title": "MailHub ${version}",
+      "title": "MailHub ${version} ${arch}",
       "sign": false
     }
   }

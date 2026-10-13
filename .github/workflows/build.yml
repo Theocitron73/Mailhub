@@ -53,6 +53,7 @@ jobs:
         if: runner.os == 'macOS'
         run: |
           sudo mdutil -a -i off || true
+          rm -rf dist/mac*
           hdiutil info | grep -o '/Volumes/MailHub.*' | while read -r vol; do
             hdiutil detach "$vol" -force || true
           done
