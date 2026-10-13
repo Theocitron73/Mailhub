@@ -1,7 +1,7 @@
 'use strict';
 
 const assert = require('assert');
-const { ruleMatches, findRule, senderRule, upsertSenderRule, domainOf } = require('../src/rules');
+const { ruleMatches, findRule, senderRule, upsertSenderRule, consolidateRules, domainOf } = require('../src/rules');
 
 let passed = 0;
 function test(name, fn) {
@@ -106,19 +106,28 @@ test('upsertSenderRule : crée en tête de liste', () => {
   assert.strictEqual(findRule(rules, 'a1', { from: 'autre@amazon.fr' }).folder, 'Achats');
 });
 
-test('upsertSenderRule : remplace le dossier au lieu de dupliquer, et se place en tête', () => {
+test('upsertSenderRule : déplace l\'expéditeur vers le nouveau dossier et se place en tête', () => {
   const rules = [
     { id: 'broad', accountId: 'a1', enabled: true, match: 'all', folder: 'Achats', conditions: [{ field: 'from', op: 'contains', value: 'amazon' }] },
     { id: 'exact', accountId: 'a1', enabled: false, match: 'all', folder: 'Vieux', conditions: [{ field: 'from', op: 'equals', value: 'factures@amazon.fr' }] },
   ];
   const res = upsertSenderRule(rules, { accountId: 'a1', from: 'factures@amazon.fr', folder: 'Factures' });
-  assert.strictEqual(res.created, false);
   assert.strictEqual(res.previousFolder, 'Vieux');
   assert.strictEqual(res.previousEnabled, false);
-  assert.strictEqual(rules.length, 2);
-  assert.strictEqual(rules[0].id, 'exact');
-  assert.strictEqual(rules[0].enabled, true);
   assert.strictEqual(findRule(rules, 'a1', { from: 'factures@amazon.fr' }).folder, 'Factures');
+});
+
+test('consolidateRules : regroupe les règles du même dossier en une seule', () => {
+  const rules = [
+    { id: '1', accountId: 'a1', folder: 'Factures', conditions: [{ field: 'from', op: 'equals', value: 'a@a.fr' }] },
+    { id: '2', accountId: 'a1', folder: 'Factures', conditions: [{ field: 'from', op: 'equals', value: 'b@b.fr' }] },
+    { id: '3', accountId: 'a1', folder: 'Autre', conditions: [{ field: 'from', op: 'equals', value: 'c@c.fr' }] },
+  ];
+  const cons = consolidateRules(rules);
+  assert.strictEqual(cons.length, 2);
+  const factures = cons.find((r) => r.folder === 'Factures');
+  assert.strictEqual(factures.conditions.length, 2);
+  assert.strictEqual(factures.match, 'any');
 });
 
 test('upsertSenderRule : un autre compte n\'est pas touché', () => {

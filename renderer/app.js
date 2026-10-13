@@ -406,12 +406,36 @@ function renderSidebar() {
         ico(special ? SPECIAL_ICON[f.specialUse] : 'folder'), h('span', { class: 'name' }, label), isCollapsed && subUnseen(acc.id, f) ? h('span', { class: 'count sub', title: 'Messages non lus dans les sous-dossiers' }, subUnseen(acc.id, f)) : null, f.unseen ? h('span', { class: 'count' }, f.unseen) : null);
 
         if (f.selectable) {
-          row.addEventListener('dragover', (e) => { if (e.dataTransfer.types.includes('application/x-mailhub')) { e.preventDefault(); row.classList.add('drop-target'); } });
+          if (!special && f.path.toUpperCase() !== 'INBOX') {
+            row.setAttribute('draggable', 'true');
+            row.addEventListener('dragstart', (e) => {
+              e.dataTransfer.setData('application/x-mailhub-folder', JSON.stringify({ accountId: acc.id, path: f.path, name: f.name, delimiter: f.delimiter }));
+            });
+          }
+          row.addEventListener('dragover', (e) => {
+            if (e.dataTransfer.types.includes('application/x-mailhub') || e.dataTransfer.types.includes('application/x-mailhub-folder')) {
+              e.preventDefault();
+              row.classList.add('drop-target');
+            }
+          });
           row.addEventListener('dragleave', () => row.classList.remove('drop-target'));
-          row.addEventListener('drop', (e) => {
+          row.addEventListener('drop', async (e) => {
             e.preventDefault();
             row.classList.remove('drop-target');
-            handleDrop(e, acc.id, f.path);
+            if (e.dataTransfer.types.includes('application/x-mailhub-folder')) {
+              try {
+                const data = JSON.parse(e.dataTransfer.getData('application/x-mailhub-folder'));
+                if (data.accountId !== acc.id) return;
+                if (data.path === f.path || f.path.startsWith(data.path + (data.delimiter || '/'))) return;
+                const delim = f.delimiter || '/';
+                const newPath = f.path + delim + data.name;
+                await call(api.folders.rename(acc.id, data.path, newPath));
+                await loadFolders(acc.id);
+                toast('Dossier déplacé en sous-dossier.');
+              } catch (err) { toast(err.message, { error: true }); }
+            } else {
+              handleDrop(e, acc.id, f.path);
+            }
           });
         }
         list.appendChild(row);
@@ -428,7 +452,17 @@ function renderSidebar() {
 
 function openFolderMenu(e, acc, f, special) {
   const items = [
+    { label: 'Tout marquer comme lu', icon: 'mailopen', onClick: async () => {
+      try {
+        await call(api.messages.markAllRead(acc.id, f.path));
+        await loadFolders(acc.id);
+        if (state.current.accountId === acc.id && state.current.folder === f.path) loadMessages({ silent: true });
+        toast('Dossier marqué comme lu.');
+      } catch (err) { toast(err.message, { error: true }); }
+    }},
+    { separator: true },
     { label: 'Nouveau sous-dossier', icon: 'plus', onClick: () => openNewFolderDialog(acc.id, f.path) },
+    { label: 'Déplacer dans un autre dossier…', icon: 'folder', disabled: special, onClick: () => openMoveFolderDialog(acc, f) },
     { label: 'Appliquer les règles de tri', icon: 'rules', onClick: () => applyRules(acc.id, f.path) },
     { label: 'Couleur du dossier…', icon: 'palette', onClick: () => openColorDialog(acc, f, special) },
   ];
@@ -589,6 +623,40 @@ async function deleteFolder(acc, f) {
     await loadFolders(acc.id);
     toast(`Dossier « ${f.name} » supprimé.`);
   } catch (err) { toast(err.message, { error: true }); }
+}
+
+function openMoveFolderDialog(acc, f) {
+  const info = state.folders[acc.id];
+  const folders = (info ? info.folders : []).filter((x) => x.selectable && x.path !== f.path && !x.path.startsWith(f.path + f.delimiter));
+  const select = h('select', null,
+    h('option', { value: '' }, '(Dossier racine)'),
+    folders.map((x) => h('option', { value: x.path }, x.path))
+  );
+  const dlg = openDialog({
+    title: `Déplacer « ${f.name} »`,
+    subtitle: 'Choisissez le dossier parent de destination',
+    body: h('div', { class: 'field' }, h('label', null, 'Dossier parent'), select),
+    buttons: [
+      { label: 'Annuler', onClick: (d) => d.close() },
+      { label: 'Déplacer', kind: 'primary', onClick: async (d, btn) => {
+        btn.disabled = true;
+        try {
+          const parentPath = select.value;
+          const delim = f.delimiter || '/';
+          const newPath = parentPath ? parentPath + delim + f.name : f.name;
+          await call(api.folders.rename(acc.id, f.path, newPath));
+          d.close();
+          await loadFolders(acc.id);
+          if (state.current.accountId === acc.id && state.current.folder === f.path) {
+            selectFolder(acc.id, newPath);
+          } else {
+            loadMessages({ silent: true });
+          }
+          toast('Dossier déplacé.');
+        } catch (err) { btn.disabled = false; d.error(err.message); }
+      }}
+    ]
+  });
 }
 
 function folderOptions(accountId, { includeNone, noneLabel } = {}) {
@@ -951,7 +1019,12 @@ function correspondentLabel(m) {
     if (!list.length) return '(sans destinataire)';
     return 'À : ' + list[0] + (list.length > 1 ? ` +${list.length - 1}` : '');
   }
-  return m.fromName || m.from || '(inconnu)';
+  const name = (m.fromName || '').trim();
+  const email = (m.from || '').trim();
+  if (name && email && name.toLowerCase() !== email.toLowerCase()) {
+    return [name, h('small', { style: 'color:var(--ink-3);margin-left:6px;font-weight:normal;' }, `<${email}>`)];
+  }
+  return email || name || '(inconnu)';
 }
 const collator = new Intl.Collator('fr', { sensitivity: 'base', numeric: true });
 function sortMessages(list) {
@@ -1971,8 +2044,11 @@ const SIG_PLACEHOLDER = '(images de la signature)'; // remplacé par les images 
 const sigBlock = (sig) => {
   if (!sig) return '';
   const text = sig.text.replace(/\s+$/, '');
+  const hasImgs = (sig.images || []).length > 0;
+  if (text.trim() && hasImgs) return SIG_DELIM + text + '\n\n' + SIG_PLACEHOLDER;
   if (text.trim()) return SIG_DELIM + text;
-  return (sig.images || []).length ? SIG_DELIM + SIG_PLACEHOLDER : '';
+  if (hasImgs) return SIG_DELIM + SIG_PLACEHOLDER;
+  return '';
 };
 
 function openCompose(init = {}) {

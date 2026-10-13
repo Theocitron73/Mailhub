@@ -38,6 +38,7 @@ contextBridge.exposeInMainWorld('mailhub', {
     attachmentData: (accountId, folder, uid, index) => invoke('messages:attachmentData', accountId, folder, uid, index),
     openAttachment: (accountId, folder, uid, index) => invoke('messages:openAttachment', accountId, folder, uid, index),
     send: (accountId, mail) => invoke('messages:send', accountId, mail),
+    markAllRead: (accountId, folder) => invoke('messages:markAllRead', accountId, folder),
     flagged: () => invoke('messages:flagged'),
     pickAttachments: () => invoke('messages:pickAttachments'),
   },

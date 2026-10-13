@@ -136,36 +136,95 @@ function senderRule({ accountId, from, folder, scope = 'address' }) {
  *   y compris contre une règle plus large (domaine, « contient »…) définie avant.
  * Modifie `rules` en place et renvoie ce qu'il faut pour annuler.
  */
+function consolidateRules(rules) {
+  if (!Array.isArray(rules)) return [];
+  const map = new Map();
+  const otherRules = [];
+
+  for (const r of rules) {
+    if (!r || !r.folder) {
+      otherRules.push(r);
+      continue;
+    }
+    const key = `${r.accountId || ''}:${r.folder}`;
+    if (!map.has(key)) {
+      map.set(key, {
+        id: r.id || newId(),
+        accountId: r.accountId,
+        name: `Dossier ${r.folder.split('/').pop()}`,
+        enabled: r.enabled !== false,
+        match: 'any',
+        conditions: [...(r.conditions || [])],
+        folder: r.folder,
+      });
+    } else {
+      const existing = map.get(key);
+      if (r.enabled === false) existing.enabled = false;
+      for (const c of (r.conditions || [])) {
+        const exists = existing.conditions.some((ec) => ec.field === c.field && ec.op === c.op && norm(ec.value) === norm(c.value));
+        if (!exists) existing.conditions.push(c);
+      }
+    }
+  }
+
+  const consolidated = Array.from(map.values());
+  return [...consolidated, ...otherRules];
+}
+
 function upsertSenderRule(rules, { accountId, from, folder, scope = 'address' }) {
   const address = norm(from);
   const value = scope === 'domain' ? domainOf(address) : address;
   if (!value) return { rule: null, created: false, previousFolder: null, previousEnabled: null };
   const field = scope === 'domain' ? 'domain' : 'from';
+  const newCond = { field, op: 'equals', value };
 
-  const index = rules.findIndex(
-    (r) =>
-      r.accountId === accountId &&
-      (r.conditions || []).length === 1 &&
-      r.conditions[0].field === field &&
-      r.conditions[0].op === 'equals' &&
-      norm(r.conditions[0].value) === value
-  );
-
-  if (index >= 0) {
-    const [rule] = rules.splice(index, 1);
-    const previousFolder = rule.folder;
-    const previousEnabled = rule.enabled !== false;
-    rule.folder = folder;
-    rule.enabled = true;
-    rules.unshift(rule);
-    return { rule, created: false, previousFolder, previousEnabled };
+  let previousFolder = null;
+  let previousEnabled = null;
+  for (let i = rules.length - 1; i >= 0; i--) {
+    const r = rules[i];
+    if (r.accountId !== accountId) continue;
+    const conds = r.conditions || [];
+    const matchIdx = conds.findIndex((c) => c.field === field && c.op === 'equals' && norm(c.value) === value);
+    if (matchIdx >= 0) {
+      previousFolder = r.folder;
+      previousEnabled = r.enabled !== false;
+      conds.splice(matchIdx, 1);
+      if (conds.length === 0) {
+        rules.splice(i, 1);
+      }
+    }
   }
 
-  const rule = senderRule({ accountId, from, folder, scope });
-  rules.unshift(rule);
-  return { rule, created: true, previousFolder: null, previousEnabled: null };
+  let targetRule = rules.find((r) => r.accountId === accountId && r.folder === folder);
+  let created = false;
+
+  if (targetRule) {
+    targetRule.match = 'any';
+    targetRule.enabled = true;
+    const exists = targetRule.conditions.some((c) => c.field === field && c.op === 'equals' && norm(c.value) === value);
+    if (!exists) {
+      targetRule.conditions.push(newCond);
+    }
+    const idx = rules.indexOf(targetRule);
+    if (idx >= 0) rules.splice(idx, 1);
+    rules.unshift(targetRule);
+  } else {
+    created = true;
+    targetRule = {
+      id: newId(),
+      accountId,
+      name: `Dossier ${folder.split('/').pop()}`,
+      enabled: true,
+      match: 'any',
+      conditions: [newCond],
+      folder,
+    };
+    rules.unshift(targetRule);
+  }
+
+  return { rule: targetRule, created, previousFolder, previousEnabled };
 }
 
 module.exports = {
-  FIELDS, OPS, ruleMatches, findRule, senderRule, upsertSenderRule, newId, domainOf, norm,
+  FIELDS, OPS, ruleMatches, findRule, senderRule, upsertSenderRule, consolidateRules, newId, domainOf, norm,
 };

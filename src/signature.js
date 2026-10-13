@@ -22,16 +22,12 @@ function cleanImage(im, { maxBytes = 1.5 * 1024 * 1024 } = {}) {
 
 /**
  * text : corps saisi ; block : le bloc de signature tel qu'inséré dans le texte ; images : images de la signature.
- * Renvoie { html, text, attachments } ou null s'il n'y a rien à faire (pas d'images, ou bloc supprimé par l'utilisateur).
+ * Renvoie { html, text, attachments } ou null s'il n'y a rien à faire (pas d'images).
  */
-function buildSignedMessage(text, block, images) {
+function buildSignedMessage(text, block, images, html = '') {
   const imgs = (images || []).map((i) => cleanImage(i)).filter(Boolean);
-  const at = block ? String(text).indexOf(block) : -1;
-  if (!imgs.length || at < 0) return null;
-  const before = text.slice(0, at);
-  const after = text.slice(at + block.length);
-  const sigText = block.replace(PLACEHOLDER, '').replace(/\n-- \n\s*$/, '');
-  const plainBlock = block.replace(PLACEHOLDER, '').replace(/\n-- \n\s*$/, '');
+  if (!imgs.length) return null;
+  if (block && String(text).indexOf(block) < 0) return null;
 
   const attachments = imgs.map((im, i) => {
     const m = IMG_RE.exec(im.dataUrl);
@@ -39,9 +35,41 @@ function buildSignedMessage(text, block, images) {
     return { filename: `signature-${i + 1}.${ext}`, content: Buffer.from(m[2], 'base64'), contentType: m[1], cid: `sig${i}@mailhub`, contentDisposition: 'inline' };
   });
   const imgHtml = imgs.map((im, i) => `<img src="cid:sig${i}@mailhub" width="${im.width}" alt="" style="max-width:100%;height:auto;display:block;margin:6px 0">`).join('');
-  const box = 'font-family:system-ui,-apple-system,Segoe UI,sans-serif;font-size:14px;white-space:pre-wrap';
-  const html = `<div style="${box}">${esc(before + sigText)}</div><div>${imgHtml}</div>` + (after.trim() ? `<div style="${box}">${esc(after)}</div>` : '');
-  return { html, text: before + plainBlock + after, attachments };
+
+  let newHtml = html;
+  if (newHtml) {
+    if (newHtml.includes(PLACEHOLDER)) {
+      newHtml = newHtml.replace(PLACEHOLDER, imgHtml);
+    } else if (newHtml.includes('data-sig="1"')) {
+      newHtml = newHtml.replace(/<div[^>]*data-sig="1"[^>]*>([\s\S]*?)<\/div>/i, (match, inner) => {
+        const replaced = inner.includes(PLACEHOLDER) ? inner.replace(PLACEHOLDER, imgHtml) : (inner + '<br><br>' + imgHtml);
+        return `<div class="sig-block" data-sig="1">${replaced}</div>`;
+      });
+    } else {
+      newHtml += `<div class="sig-block" data-sig="1"><br><br>${imgHtml}</div>`;
+    }
+  } else {
+    const at = block ? String(text).indexOf(block) : -1;
+    const before = at >= 0 ? text.slice(0, at) : text;
+    const after = at >= 0 ? text.slice(at + block.length) : '';
+    const box = 'font-family:system-ui,-apple-system,Segoe UI,sans-serif;font-size:14px;white-space:pre-wrap';
+    const cleanBlock = block ? block.replace(PLACEHOLDER, '') : '';
+    newHtml = `<div style="${box}">${esc(before + cleanBlock)}</div><div>${imgHtml}</div>` + (after.trim() ? `<div style="${box}">${esc(after)}</div>` : '');
+  }
+
+  const atText = block ? String(text).indexOf(block) : -1;
+  let newText = text;
+  const plainBlock = block ? block.replace(PLACEHOLDER, '').replace(/\n-- \n\s*$/, '') : '';
+  if (atText >= 0) {
+    const before = text.slice(0, atText);
+    const after = text.slice(atText + block.length);
+    newText = before + plainBlock + after;
+  } else if (plainBlock) {
+    newText = text + '\n' + plainBlock;
+  }
+  newText = newText.replace(PLACEHOLDER, '').trim();
+
+  return { html: newHtml, text: newText, attachments };
 }
 
 module.exports = { PLACEHOLDER, cleanImage, buildSignedMessage };

@@ -9,7 +9,7 @@ const { Store } = require('./src/store');
 const { ImapManager, friendlyError } = require('./src/imap');
 const rulesio = require('./src/rulesio');
 const { attachmentPreview } = require('./src/attachment');
-const { cleanImage } = require('./src/signature');
+const { cleanImage, buildSignedMessage } = require('./src/signature');
 const tb = require('./src/thunderbird');
 const { findRule, senderRule, upsertSenderRule } = require('./src/rules');
 
@@ -673,6 +673,36 @@ async function handleChannel(channel, args) {
     const acc = store.getAccount(accountId);
     if (!acc) throw new Error('Compte introuvable');
 
+    let finalHtml = mail.html || `<div style="font-family:sans-serif;line-height:1.5;">${mail.text || ''}</div>`;
+    let finalText = mail.text || '';
+    let finalAttachments = (mail.attachments || []).map((a, i) => {
+      const isObj = typeof a === 'object' && a !== null;
+      return {
+        index: i,
+        filename: (isObj ? a.name : a) || 'piece-jointe',
+        contentType: (isObj && a.contentType) || 'application/octet-stream',
+        size: (isObj && a.size) || 0,
+        contentBase64: (isObj && a.dataUrl ? a.dataUrl.split(',')[1] : '') || '',
+      };
+    });
+
+    if (mail.signatureId) {
+      const sig = (acc.signatures || []).find((s) => s.id === mail.signatureId);
+      const built = sig && sig.images && sig.images.length ? buildSignedMessage(finalText, mail.signatureBlock || '', sig.images, finalHtml) : null;
+      if (built) {
+        finalText = built.text;
+        finalHtml = built.html;
+        const sigAtts = built.attachments.map((sa, i) => ({
+          index: finalAttachments.length + i,
+          filename: sa.filename,
+          contentType: sa.contentType,
+          size: sa.content.length,
+          contentBase64: sa.content.toString('base64'),
+        }));
+        finalAttachments = [...sigAtts, ...finalAttachments];
+      }
+    }
+
     // Add to Sent folder in demoStore
     const newUid = ++demoStore.nextUid;
     const newMsg = {
@@ -684,22 +714,13 @@ async function handleChannel(channel, args) {
       to: mail.to || '',
       cc: mail.cc || '',
       date: new Date().toISOString(),
-      size: (mail.text || '').length + 1000,
+      size: finalText.length + 1000,
       seen: true,
       flagged: false,
-      hasAttachment: !!(mail.attachments && mail.attachments.length),
-      html: mail.html || `<div style="font-family:sans-serif;line-height:1.5;">${mail.text || ''}</div>`,
-      text: mail.text || '',
-      attachments: (mail.attachments || []).map((a, i) => {
-        const isObj = typeof a === 'object' && a !== null;
-        return {
-          index: i,
-          filename: (isObj ? a.name : a) || 'piece-jointe',
-          contentType: (isObj && a.contentType) || 'application/octet-stream',
-          size: (isObj && a.size) || 0,
-          contentBase64: (isObj && a.dataUrl ? a.dataUrl.split(',')[1] : '') || '',
-        };
-      }),
+      hasAttachment: !!finalAttachments.length,
+      html: finalHtml,
+      text: finalText,
+      attachments: finalAttachments,
     };
 
     if (!demoStore.messages[accountId]) demoStore.messages[accountId] = [];
@@ -711,6 +732,24 @@ async function handleChannel(channel, args) {
       store.recordContacts([{ address: mail.to, name: '' }]);
     }
     return { ok: true, messageId: `<${newUid}@mailhub.web>` };
+  }
+
+  if (channel === 'messages:markAllRead') {
+    const [accountId, folder] = args;
+    const acc = store.getAccount(accountId);
+    if (acc && acc.imap && acc.imap.host !== 'demo' && imapManager) {
+      try {
+        return await imapManager.markAllRead(accountId, folder);
+      } catch (e) {
+        console.warn('Real IMAP markAllRead error:', e.message);
+      }
+    }
+    const msgs = demoStore.messages[accountId] || [];
+    msgs.forEach((m) => {
+      if (m.folder === folder) m.seen = true;
+    });
+    saveDemoStore();
+    return true;
   }
 
   if (channel === 'messages:flagged') {

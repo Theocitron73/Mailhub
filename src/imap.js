@@ -245,6 +245,16 @@ class ImapManager extends EventEmitter {
     return { ok: true };
   }
 
+  async markAllRead(accountId, folder) {
+    return this.withMailbox(accountId, folder, async (client) => {
+      const found = await client.search({ seen: false }, { uid: true });
+      if (found && found.length) {
+        await client.messageFlagsAdd(found, ['\\Seen'], { uid: true });
+      }
+      return true;
+    });
+  }
+
   async _findSpecial(client, use, nameRegex) {
     const list = await client.list();
     const bySpecial = list.find((f) => f.specialUse === use);
@@ -668,7 +678,7 @@ class ImapManager extends EventEmitter {
     // Signature avec images : les images viennent du compte (jamais de l'interface) et sont intégrées au message
     if (mail.signatureId) {
       const sig = (acc.signatures || []).find((s) => s.id === mail.signatureId);
-      const built = sig && sig.images && sig.images.length ? buildSignedMessage(message.text, mail.signatureBlock || '', sig.images) : null;
+      const built = sig && sig.images && sig.images.length ? buildSignedMessage(message.text, mail.signatureBlock || '', sig.images, mail.html || '') : null;
       if (built) {
         message.text = built.text;
         message.html = built.html;

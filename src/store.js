@@ -2,7 +2,7 @@
 
 const fs = require('fs');
 const path = require('path');
-const { upsertSenderRule, newId } = require('./rules');
+const { upsertSenderRule, consolidateRules, newId } = require('./rules');
 const { cleanImage } = require('./signature');
 
 /**
@@ -25,6 +25,10 @@ class Store {
       if (fs.existsSync(this.file)) {
         const parsed = JSON.parse(fs.readFileSync(this.file, 'utf8'));
         this.data = Object.assign(this.data, parsed);
+        if (Array.isArray(this.data.rules)) {
+          this.data.rules = consolidateRules(this.data.rules);
+          this._save();
+        }
       }
     } catch (err) {
       console.error('Lecture du stockage impossible :', err);
