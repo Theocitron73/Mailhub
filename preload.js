@@ -89,9 +89,15 @@ contextBridge.exposeInMainWorld('mailhub', {
     set: (patch) => invoke('prefs:set', patch),
   },
 
+  // mises à jour automatiques
+  updates: {
+    check: () => invoke('updates:check'),
+    install: () => invoke('updates:install'),
+  },
+
   // événements poussés par le processus principal
   on: (channel, callback) => {
-    const allowed = ['mail:sorted', 'mail:new', 'mail:changed', 'account:status', 'app:error', 'app:closeTab'];
+    const allowed = ['mail:sorted', 'mail:new', 'mail:changed', 'account:status', 'app:error', 'app:closeTab', 'app:updateAvailable', 'app:updateDownloaded'];
     if (!allowed.includes(channel)) return () => {};
     const listener = (_event, payload) => callback(payload);
     ipcRenderer.on(channel, listener);

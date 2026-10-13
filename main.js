@@ -13,6 +13,11 @@ const { attachmentPreview } = require('./src/attachment');
 const { cleanImage } = require('./src/signature');
 const tb = require('./src/thunderbird');
 
+let autoUpdater = null;
+try {
+  ({ autoUpdater } = require('electron-updater'));
+} catch (_) {}
+
 let mainWindow = null;
 let store = null;
 let manager = null;
@@ -471,6 +476,20 @@ function registerIpc() {
     }
     return prefs;
   });
+
+  // ---- mises à jour automatiques
+  handle('updates:check', async () => {
+    if (!autoUpdater || !app.isPackaged) return { update: false, reason: 'mode dev' };
+    const res = await autoUpdater.checkForUpdates();
+    return { update: !!res && !!res.updateInfo, info: res && res.updateInfo };
+  });
+  handle('updates:install', () => {
+    if (autoUpdater) {
+      quitting = true;
+      autoUpdater.quitAndInstall();
+    }
+    return true;
+  });
 }
 
 function wireManagerEvents() {
@@ -524,8 +543,37 @@ app.whenReady().then(() => {
   // Surveillance IMAP (IDLE) + tri automatique des nouveaux messages
   store.listAccounts().forEach((acc) => manager.startWatching(acc.id));
 
+  initAutoUpdater();
+
   app.on('activate', () => showWindow());
 });
+
+function initAutoUpdater() {
+  if (!autoUpdater || !app.isPackaged) return;
+
+  autoUpdater.autoDownload = true;
+  autoUpdater.autoInstallOnAppQuit = true;
+
+  autoUpdater.on('update-available', (info) => {
+    send('app:updateAvailable', { version: info.version });
+  });
+
+  autoUpdater.on('update-downloaded', (info) => {
+    send('app:updateDownloaded', { version: info.version });
+  });
+
+  autoUpdater.on('error', (err) => {
+    console.warn('Mise à jour automatique :', err.message);
+  });
+
+  setTimeout(() => {
+    autoUpdater.checkForUpdates().catch(() => {});
+  }, 10000);
+
+  setInterval(() => {
+    autoUpdater.checkForUpdates().catch(() => {});
+  }, 4 * 60 * 60 * 1000);
+}
 
 app.on('before-quit', () => {
   quitting = true;

@@ -1,10 +1,11 @@
-name: Installateurs MailHub
+name: Installateurs et Mises à jour MailHub
 
-# Lancer à la main (onglet Actions > Installateurs MailHub > Run workflow)
-# ou en poussant un tag de version, par exemple : git tag v1.0.0 && git push --tags
+# Se déclenche automatiquement lors d'un push sur main, sur un tag de version (v*),
+# ou manuellement via l'onglet Actions > Run workflow.
 on:
   workflow_dispatch:
   push:
+    branches: [main]
     tags: ['v*']
 
 jobs:
@@ -17,10 +18,14 @@ jobs:
             script: dist:win
             files: |
               dist/*.exe
+              dist/latest.yml
+              dist/*.blockmap
           - os: macos-latest
             script: dist:mac
             files: |
               dist/*.dmg
+              dist/latest-mac.yml
+              dist/*.blockmap
     runs-on: ${{ matrix.os }}
     steps:
       - uses: actions/checkout@v4
@@ -34,8 +39,10 @@ jobs:
 
       - run: npm test
 
-      # Sans certificat, les installateurs ne sont pas signés (voir README, section « Signature »).
+      # Construit l'installateur et génère le fichier de manifeste de mise à jour (latest.yml)
       - run: npm run ${{ matrix.script }}
+        env:
+          GITHUB_TOKEN: ${{ secrets.GITHUB_TOKEN }}
 
       - uses: actions/upload-artifact@v4
         with:
@@ -44,18 +51,29 @@ jobs:
           if-no-files-found: error
 
   release:
-    if: startsWith(github.ref, 'refs/tags/v')
+    if: startsWith(github.ref, 'refs/tags/v') || github.ref == 'refs/heads/main'
     needs: build
     runs-on: ubuntu-latest
     permissions:
       contents: write
     steps:
+      - uses: actions/checkout@v4
+
+      - name: Déterminer la version
+        id: pkg
+        run: |
+          VERSION=$(node -p "require('./package.json').version")
+          echo "version=$VERSION" >> $GITHUB_OUTPUT
+
       - uses: actions/download-artifact@v4
         with:
           path: installateurs
           merge-multiple: true
 
-      - uses: softprops/action-gh-release@v2
+      - name: Publier la Release GitHub
+        uses: softprops/action-gh-release@v2
         with:
+          tag_name: v${{ steps.pkg.outputs.version }}
+          name: MailHub v${{ steps.pkg.outputs.version }}
           files: installateurs/*
           generate_release_notes: true

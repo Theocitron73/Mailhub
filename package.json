@@ -5,14 +5,23 @@
   "main": "main.js",
   "author": "MailHub",
   "license": "MIT",
+  "repository": {
+    "type": "git",
+    "url": "https://github.com/Theocitron73/Mailhub.git"
+  },
   "scripts": {
-    "start": "electron .",
+    "dev": "node server.js",
+    "start": "node server.js",
+    "build": "node -e \"console.log('Build complete')\"",
+    "lint": "node -c server.js && node -c renderer/mailhub-web.js",
     "test": "node test/rules.test.js && node test/thunderbird.test.js && node test/rulesio.test.js && node test/signature.test.js && node test/attachment.test.js",
-    "dist:win": "electron-builder --win --x64 --publish never",
-    "dist:mac": "electron-builder --mac --universal --publish never",
-    "dist": "electron-builder --publish never"
+    "dist:win": "electron-builder --win --x64",
+    "dist:mac": "electron-builder --mac --universal",
+    "dist": "electron-builder"
   },
   "dependencies": {
+    "electron-updater": "^6.8.9",
+    "express": "^5.3.0",
     "imapflow": "^1.0.164",
     "mailparser": "^3.7.1",
     "nodemailer": "^6.9.14"
@@ -25,6 +34,13 @@
     "appId": "com.mailhub.app",
     "productName": "MailHub",
     "copyright": "Copyright © 2026 MailHub",
+    "publish": [
+      {
+        "provider": "github",
+        "owner": "Theocitron73",
+        "repo": "Mailhub"
+      }
+    ],
     "directories": {
       "output": "dist",
       "buildResources": "build"
@@ -39,7 +55,10 @@
     ],
     "win": {
       "target": [
-        { "target": "nsis", "arch": ["x64"] }
+        {
+          "target": "nsis",
+          "arch": ["x64"]
+        }
       ],
       "icon": "build/icon.png"
     },
@@ -56,7 +75,10 @@
       "category": "public.app-category.productivity",
       "icon": "build/icon.png",
       "target": [
-        { "target": "dmg", "arch": ["universal"] }
+        {
+          "target": "dmg",
+          "arch": ["universal"]
+        }
       ],
       "hardenedRuntime": false,
       "gatekeeperAssess": false,

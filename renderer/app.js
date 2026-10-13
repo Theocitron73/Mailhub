@@ -313,16 +313,19 @@ function askText({ title, label, value, confirm, hint }) {
 function showMenu(x, y, items) {
   closeMenu();
   const menu = h('div', { class: 'menu', id: 'ctx-menu' },
-    items.map((it) => h('button', {
-      class: it.danger ? 'danger-item' : '',
-      on: { click: () => { closeMenu(); it.onClick(); } },
-    }, it.icon ? ico(it.icon, 16) : null, it.label)));
+    items.map((it) => {
+      if (it.separator) return h('div', { class: 'menu-divider' });
+      return h('button', {
+        class: it.danger ? 'danger-item' : '',
+        on: { click: () => { closeMenu(); it.onClick(); } },
+      }, it.icon ? ico(it.icon, 16) : null, it.label, it.shortcut ? h('span', { class: 'menu-shortcut' }, it.shortcut) : null);
+    }));
   document.body.appendChild(menu);
   const r = menu.getBoundingClientRect();
   menu.style.left = Math.min(x, window.innerWidth - r.width - 8) + 'px';
   menu.style.top = Math.min(y, window.innerHeight - r.height - 8) + 'px';
   const outside = (e) => {
-    if (menu.contains(e.target)) return; // le clic sur une entrée doit arriver jusqu'au bouton
+    if (menu.contains(e.target)) return;
     document.removeEventListener('mousedown', outside, true);
     closeMenu();
   };
@@ -1016,6 +1019,7 @@ function renderList() {
       on: {
         click: (e) => onRowClick(e, m),
         dblclick: () => onRowDblClick(m),
+        contextmenu: (e) => onRowContextMenu(e, m),
         auxclick: (e) => { if (e.button === 1) { e.preventDefault(); selectOnly(m); renderList(); openInTab(m); } },
         dragstart: (e) => onRowDrag(e, m, row),
         dragend: () => { row.classList.remove('dragging'); hideDragHint(); },
@@ -1091,6 +1095,115 @@ function onRowDblClick(m) {
   selectOnly(m);
   renderList();
   openInTab(m);
+}
+
+function onRowContextMenu(e, m) {
+  e.preventDefault();
+  const key = keyOf(m);
+  if (!state.sel.has(key)) {
+    selectOnly(m);
+    renderList();
+  }
+  const sel = selectedMessages();
+  const isMultiple = sel.length > 1;
+  const anyUnread = sel.some((x) => !x.seen);
+  const anyUnflagged = sel.some((x) => !x.flagged);
+
+  const items = [
+    {
+      label: isMultiple ? `Ouvrir les ${sel.length} messages` : 'Ouvrir',
+      icon: 'mailopen',
+      onClick: () => {
+        if (!isMultiple) {
+          if (layoutPref() === 'full') openInTab(m);
+          else openMessage(m);
+        } else {
+          sel.slice(0, 5).forEach((x) => openInTab(x));
+        }
+      },
+    },
+    {
+      label: 'Ouvrir dans un nouvel onglet',
+      icon: 'layoutFull',
+      shortcut: 'Double-clic',
+      onClick: () => {
+        sel.forEach((x) => openInTab(x));
+      },
+    },
+    { separator: true },
+    {
+      label: anyUnread ? 'Marquer comme lu' : 'Marquer comme non lu',
+      icon: anyUnread ? 'mailopen' : 'mail',
+      shortcut: 'U',
+      onClick: () => setSeen(sel, anyUnread),
+    },
+    {
+      label: anyUnflagged ? 'Ajouter aux favoris' : 'Retirer des favoris',
+      icon: 'star',
+      shortcut: 'S',
+      onClick: () => {
+        sel.forEach((x) => {
+          if (!!x.flagged !== anyUnflagged) toggleFlag(x);
+        });
+      },
+    },
+    { separator: true },
+    ...(!isMultiple ? [
+      {
+        label: 'Répondre',
+        icon: 'reply',
+        shortcut: 'R',
+        onClick: async () => {
+          try {
+            const detail = (state.opened && keyOf(state.opened.msg) === key && state.opened.detail)
+              ? state.opened.detail
+              : await call(api.messages.get(m.accountId, m.folder, m.uid));
+            replyTo({ msg: m, detail });
+          } catch (err) {
+            toast(err.message, { error: true });
+          }
+        },
+      },
+      {
+        label: 'Transférer',
+        icon: 'forward',
+        onClick: async () => {
+          try {
+            const detail = (state.opened && keyOf(state.opened.msg) === key && state.opened.detail)
+              ? state.opened.detail
+              : await call(api.messages.get(m.accountId, m.folder, m.uid));
+            forward({ msg: m, detail });
+          } catch (err) {
+            toast(err.message, { error: true });
+          }
+        },
+      },
+      { separator: true },
+    ] : []),
+    {
+      label: 'Ranger dans un dossier…',
+      icon: 'folder',
+      shortcut: 'M',
+      onClick: () => openFilePicker(sel),
+    },
+    ...(!isMultiple ? [
+      {
+        label: `Toujours ranger « ${m.from} »…`,
+        icon: 'rules',
+        onClick: () => openFilePicker(sel, { from: m.from, offerRule: true }),
+      },
+    ] : []),
+    { separator: true },
+    {
+      label: isMultiple ? `Supprimer les ${sel.length} messages` : 'Supprimer',
+      icon: 'trash',
+      shortcut: 'Suppr',
+      danger: true,
+      onClick: () => deleteMessages(sel),
+    },
+  ];
+
+  showMenu(e.clientX, e.clientY, items);
 }
 
 function selectOnly(m) {
@@ -1870,8 +1983,211 @@ function openCompose(init = {}) {
   const to = h('input', { type: 'text', value: init.to || '', placeholder: 'destinataire@exemple.com', spellcheck: 'false', autocomplete: 'off' });
   const cc = h('input', { type: 'text', value: init.cc || '', spellcheck: 'false', autocomplete: 'off' });
   const subject = h('input', { type: 'text', value: init.subject || '' });
-  const body = h('textarea', { rows: '12' });
-  // signature : insérée au-dessus du texte cité (réponse / transfert), changeable depuis la liste « Signature »
+
+  // Éditeur riche (contenteditable)
+  const editor = h('div', {
+    class: 'compose-editor',
+    contenteditable: 'true',
+    spellcheck: 'true',
+    role: 'textbox',
+    'aria-multiline': 'true',
+  });
+
+  const exec = (cmd, val = null) => {
+    editor.focus();
+    document.execCommand(cmd, false, val);
+  };
+
+  // Gestion des tailles de police
+  let curFontSize = 3;
+  const setFontSize = (size) => {
+    curFontSize = Math.max(1, Math.min(6, size));
+    sizeSelect.value = String(curFontSize);
+    exec('fontSize', String(curFontSize));
+  };
+  const sizeSelect = h('select', {
+    class: 'fmt-select',
+    title: 'Taille du texte',
+    on: { change: (e) => setFontSize(parseInt(e.target.value, 10)) },
+  },
+    h('option', { value: '2' }, 'Petit (12px)'),
+    h('option', { value: '3', selected: true }, 'Normal (14px)'),
+    h('option', { value: '4' }, 'Grand (18px)'),
+    h('option', { value: '5' }, 'Très grand (24px)')
+  );
+
+  // Popover couleur
+  let colorPop = null;
+  const closeColorPop = () => { if (colorPop) { colorPop.remove(); colorPop = null; } };
+  const toggleColorPop = (anchorBtn) => {
+    if (colorPop) { closeColorPop(); return; }
+    closeEmojiPop();
+    const colors = ['#17212e', '#5a6677', '#2f4b8a', '#12a594', '#30a46c', '#f5a524', '#f76b15', '#e5484d', '#8e4ec6', '#d6409f'];
+    const customInput = h('input', {
+      type: 'color', value: '#2f4b8a',
+      on: { input: (e) => { exec('foreColor', e.target.value); closeColorPop(); } },
+    });
+    colorPop = h('div', { class: 'color-popover' },
+      h('div', { class: 'color-popover-grid' },
+        colors.map((c) => h('button', {
+          type: 'button', class: 'color-popover-btn', style: `background:${c}`, title: c,
+          on: { mousedown: (e) => { e.preventDefault(); exec('foreColor', c); closeColorPop(); } },
+        }))
+      ),
+      h('label', { class: 'color-popover-custom' }, customInput, 'Couleur libre…')
+    );
+    anchorBtn.parentNode.appendChild(colorPop);
+    const outside = (e) => {
+      if (colorPop && !colorPop.contains(e.target) && e.target !== anchorBtn) {
+        closeColorPop();
+        document.removeEventListener('mousedown', outside, true);
+      }
+    };
+    setTimeout(() => document.addEventListener('mousedown', outside, true), 0);
+  };
+
+  // Popover Emojis
+  let emojiPop = null;
+  const closeEmojiPop = () => { if (emojiPop) { emojiPop.remove(); emojiPop = null; } };
+  const toggleEmojiPop = (anchorBtn) => {
+    if (emojiPop) { closeEmojiPop(); return; }
+    closeColorPop();
+    const groups = [
+      {
+        title: 'Émotions & Visages',
+        list: ['😊', '😂', '😃', '😉', '😍', '🥰', '😎', '🤔', '🤫', '🥳', '😴', '😇', '👍', '👎', '👏', '🙌', '❤️', '🔥', '✨', '🎉', '🚀'],
+      },
+      {
+        title: 'Bureau & Courrier',
+        list: ['✉️', '📧', '📎', '📁', '📂', '📅', '📆', '📊', '📈', '📌', '📝', '💼', '💻', '💡', '🎯', '✅', '❌', '⚠️', '💬', '🏷️', '🔒'],
+      },
+      {
+        title: 'Symboles & Extras',
+        list: ['⭐', '🌟', '💯', '🔔', '⏰', '⏱️', '☕', '🥐', '🌍', '🏠', '📞', '🤝', '💪', '🙏', '👀', '⚡', '🌈', '🎁', '🏆', '💎', '☀️'],
+      },
+    ];
+    emojiPop = h('div', { class: 'emoji-popover' },
+      groups.map((g) => h('div', null,
+        h('div', { class: 'emoji-group-title' }, g.title),
+        h('div', { class: 'emoji-grid' },
+          g.list.map((emo) => h('button', {
+            type: 'button', class: 'emoji-btn',
+            on: { mousedown: (e) => { e.preventDefault(); exec('insertText', emo); closeEmojiPop(); } },
+          }, emo))
+        )
+      ))
+    );
+    anchorBtn.parentNode.appendChild(emojiPop);
+    const outside = (e) => {
+      if (emojiPop && !emojiPop.contains(e.target) && e.target !== anchorBtn) {
+        closeEmojiPop();
+        document.removeEventListener('mousedown', outside, true);
+      }
+    };
+    setTimeout(() => document.addEventListener('mousedown', outside, true), 0);
+  };
+
+  // Boîte de dialogue pour insérer un lien avec texte personnalisé
+  const promptLinkDialog = () => {
+    closeColorPop();
+    closeEmojiPop();
+    const sel = window.getSelection();
+    let savedRange = null;
+    let initialText = '';
+    if (sel && sel.rangeCount > 0) {
+      savedRange = sel.getRangeAt(0).cloneRange();
+      initialText = sel.toString();
+    }
+    const textInput = h('input', { type: 'text', value: initialText, placeholder: 'Ex : Notre documentation' });
+    const urlInput = h('input', { type: 'text', value: 'https://', placeholder: 'https://exemple.fr' });
+    const linkDlg = openDialog({
+      title: 'Insérer un lien',
+      subtitle: 'Personnalisez le texte affiché et l’adresse URL',
+      body: h('div', { class: 'field-group', style: 'display:grid;gap:12px' },
+        h('div', { class: 'field' }, h('label', null, 'Texte à afficher'), textInput),
+        h('div', { class: 'field' }, h('label', null, 'Adresse web (URL)'), urlInput)
+      ),
+      buttons: [
+        { label: 'Annuler', onClick: (d) => d.close() },
+        {
+          label: 'Insérer le lien', kind: 'primary',
+          onClick: (d) => {
+            let url = urlInput.value.trim();
+            if (!url) return;
+            if (!/^https?:\/\//i.test(url) && !/^mailto:/i.test(url)) url = 'https://' + url;
+            const text = textInput.value.trim() || url;
+            d.close();
+            if (savedRange) {
+              const s = window.getSelection();
+              s.removeAllRanges();
+              s.addRange(savedRange);
+            }
+            editor.focus();
+            const a = document.createElement('a');
+            a.href = url;
+            a.target = '_blank';
+            a.rel = 'noopener noreferrer';
+            a.textContent = text;
+            if (savedRange && !savedRange.collapsed) {
+              savedRange.deleteContents();
+              savedRange.insertNode(a);
+            } else {
+              document.execCommand('insertHTML', false, a.outerHTML);
+            }
+          },
+        },
+      ],
+    });
+    (initialText ? urlInput : textInput).focus();
+    urlInput.addEventListener('keydown', (ev) => {
+      if (ev.key === 'Enter') linkDlg.buttons[1].onClick(linkDlg);
+    });
+  };
+
+  // Barre d'outils de formatage
+  const colorBtn = h('button', {
+    type: 'button', class: 'fmt-btn', title: 'Couleur du texte',
+    on: { click: (e) => { e.preventDefault(); toggleColorPop(colorBtn); } },
+  }, ico('palette', 15));
+
+  const emojiBtn = h('button', {
+    type: 'button', class: 'fmt-btn', title: 'Insérer un emoji',
+    on: { click: (e) => { e.preventDefault(); toggleEmojiPop(emojiBtn); } },
+  }, ico('smile', 16));
+
+  const toolbar = h('div', { class: 'compose-toolbar' },
+    h('button', { type: 'button', class: 'fmt-btn', title: 'Gras (Ctrl+B)', on: { mousedown: (e) => { e.preventDefault(); exec('bold'); } } }, ico('bold', 15)),
+    h('button', { type: 'button', class: 'fmt-btn', title: 'Italique (Ctrl+I)', on: { mousedown: (e) => { e.preventDefault(); exec('italic'); } } }, ico('italic', 15)),
+    h('button', { type: 'button', class: 'fmt-btn', title: 'Souligné (Ctrl+U)', on: { mousedown: (e) => { e.preventDefault(); exec('underline'); } } }, ico('underline', 15)),
+    h('button', { type: 'button', class: 'fmt-btn', title: 'Barré', on: { mousedown: (e) => { e.preventDefault(); exec('strikeThrough'); } } }, ico('strike', 15)),
+    h('span', { class: 'tb-sep' }),
+    h('button', { type: 'button', class: 'fmt-btn', title: 'Diminuer la taille', on: { mousedown: (e) => { e.preventDefault(); setFontSize(curFontSize - 1); } } }, 'A-'),
+    h('button', { type: 'button', class: 'fmt-btn', title: 'Augmenter la taille', on: { mousedown: (e) => { e.preventDefault(); setFontSize(curFontSize + 1); } } }, 'A+'),
+    sizeSelect,
+    h('span', { class: 'tb-sep' }),
+    colorBtn,
+    h('span', { class: 'tb-sep' }),
+    h('button', { type: 'button', class: 'fmt-btn', title: 'Aligner à gauche', on: { mousedown: (e) => { e.preventDefault(); exec('justifyLeft'); } } }, ico('alignLeft', 15)),
+    h('button', { type: 'button', class: 'fmt-btn', title: 'Centrer', on: { mousedown: (e) => { e.preventDefault(); exec('justifyCenter'); } } }, ico('alignCenter', 15)),
+    h('button', { type: 'button', class: 'fmt-btn', title: 'Aligner à droite', on: { mousedown: (e) => { e.preventDefault(); exec('justifyRight'); } } }, ico('alignRight', 15)),
+    h('span', { class: 'tb-sep' }),
+    h('button', { type: 'button', class: 'fmt-btn', title: 'Liste à puces', on: { mousedown: (e) => { e.preventDefault(); exec('insertUnorderedList'); } } }, ico('listBullet', 15)),
+    h('button', { type: 'button', class: 'fmt-btn', title: 'Liste numérotée', on: { mousedown: (e) => { e.preventDefault(); exec('insertOrderedList'); } } }, ico('listNumber', 15)),
+    h('span', { class: 'tb-sep' }),
+    h('button', { type: 'button', class: 'fmt-btn', title: 'Insérer un lien personnalisé (Ctrl+K)', on: { click: (e) => { e.preventDefault(); promptLinkDialog(); } } }, ico('link', 15)),
+    emojiBtn
+  );
+
+  editor.addEventListener('keydown', (e) => {
+    if ((e.ctrlKey || e.metaKey) && (e.key === 'k' || e.key === 'K')) {
+      e.preventDefault();
+      promptLinkDialog();
+    }
+  });
+
+  const composeBox = h('div', { class: 'compose-box' }, toolbar, editor);
+
+  // Signatures
   const sigSel = h('select', { 'aria-label': 'Signature' });
   const sigImgs = h('div', { class: 'sig-images', hidden: true });
   const sigsOf = () => (accountById(from.value) || {}).signatures || [];
@@ -1885,11 +2201,22 @@ function openCompose(init = {}) {
   const applySig = (first) => {
     const sig = sigsOf().find((x) => x.id === sigSel.value);
     const next = sigBlock(sig);
-    if (first) { body.value = next + (init.body || ''); currentBlock = next; return; }
-    const v = body.value;
-    const at = currentBlock ? v.indexOf(currentBlock) : -1;
-    if (at >= 0) body.value = v.slice(0, at) + next + v.slice(at + currentBlock.length);
-    else if (next) { const pos = body.selectionStart || 0; body.value = v.slice(0, pos) + next + v.slice(pos); }
+    if (first) {
+      const initialHtml = init.bodyHtml
+        ? init.bodyHtml
+        : (init.body ? esc(init.body).replace(/\n/g, '<br>') : '');
+      const sigHtml = next ? '<div class="sig-block" data-sig="1"><br><br>' + esc(next).replace(/\n/g, '<br>') + '</div>' : '';
+      editor.innerHTML = initialHtml + sigHtml;
+      currentBlock = next;
+      return;
+    }
+    const curSigEl = editor.querySelector('[data-sig="1"]');
+    if (curSigEl) {
+      if (next) curSigEl.innerHTML = '<br><br>' + esc(next).replace(/\n/g, '<br>');
+      else curSigEl.remove();
+    } else if (next) {
+      editor.insertAdjacentHTML('beforeend', '<div class="sig-block" data-sig="1"><br><br>' + esc(next).replace(/\n/g, '<br>') + '</div>');
+    }
     currentBlock = next;
   };
   const drawSigImgs = () => {
@@ -1906,6 +2233,7 @@ function openCompose(init = {}) {
   drawSigImgs();
   sigSel.addEventListener('change', () => { applySig(false); drawSigImgs(); });
   from.addEventListener('change', () => { fillSigSelect((accountById(from.value) || {}).defaultSignature); applySig(false); drawSigImgs(); });
+
   let files = [];
   const attBox = h('div', { class: 'att-list' });
   const renderAtt = () => {
@@ -1913,6 +2241,7 @@ function openCompose(init = {}) {
     files.forEach((f, i) => attBox.appendChild(h('span', { class: 'att-chip' }, ico('clip', 15), f.name, h('span', { class: 'size' }, fmtSize(f.size)),
       h('button', { class: 'icon-btn', style: 'width:22px;height:22px', 'aria-label': 'Retirer', on: { click: () => { files.splice(i, 1); renderAtt(); } } }, ico('close', 14)))));
   };
+
   const dlg = openDialog({
     title: 'Nouveau message',
     large: true,
@@ -1922,11 +2251,15 @@ function openCompose(init = {}) {
       h('div', { class: 'row-line' }, h('label', null, 'À'), to),
       h('div', { class: 'row-line' }, h('label', null, 'Cc'), cc),
       h('div', { class: 'row-line' }, h('label', null, 'Objet'), subject),
-      body,
+      composeBox,
       sigImgs,
-      h('div', null, h('button', { class: 'subtle', on: { click: async () => {
-        try { files = files.concat(await call(api.messages.pickAttachments())); renderAtt(); } catch (err) { dlg.error(err.message); }
-      } } }, ico('clip', 16), 'Joindre un fichier'), attBox)),
+      h('div', null,
+        h('button', { class: 'subtle', on: { click: async () => {
+          try { files = files.concat(await call(api.messages.pickAttachments())); renderAtt(); } catch (err) { dlg.error(err.message); }
+        } } }, ico('clip', 16), 'Joindre un fichier (ou glissez-déposez ici)'),
+        attBox
+      )
+    ),
     buttons: [
       { label: 'Annuler', onClick: (d) => d.close() },
       {
@@ -1937,8 +2270,9 @@ function openCompose(init = {}) {
           d.error('');
           try {
             await call(api.messages.send(from.value, {
-              to: to.value.trim(), cc: cc.value.trim(), subject: subject.value, text: body.value,
-              attachments: files.map((f) => f.path), inReplyTo: init.inReplyTo, references: init.references,
+              to: to.value.trim(), cc: cc.value.trim(), subject: subject.value,
+              html: editor.innerHTML, text: editor.innerText || editor.textContent || '',
+              attachments: files, inReplyTo: init.inReplyTo, references: init.references,
               signatureId: sigSel.value || undefined, signatureBlock: currentBlock,
             }));
             d.close();
@@ -1949,10 +2283,57 @@ function openCompose(init = {}) {
       },
     ],
   });
+
+  // Glisser-déposer de pièces jointes directement sur la fenêtre du message
+  const dropOverlay = h('div', { class: 'compose-dropzone-overlay', hidden: true },
+    ico('clip', 36),
+    h('span', null, 'Déposez vos fichiers pour les joindre au message')
+  );
+  dlg.el.classList.add('compose-dropzone-active');
+  dlg.el.appendChild(dropOverlay);
+
+  let dragDepth = 0;
+  dlg.el.addEventListener('dragenter', (e) => {
+    if (e.dataTransfer && e.dataTransfer.types && Array.from(e.dataTransfer.types).includes('Files')) {
+      e.preventDefault();
+      dragDepth++;
+      dropOverlay.hidden = false;
+    }
+  });
+  dlg.el.addEventListener('dragover', (e) => {
+    if (e.dataTransfer && e.dataTransfer.types && Array.from(e.dataTransfer.types).includes('Files')) {
+      e.preventDefault();
+      e.dataTransfer.dropEffect = 'copy';
+    }
+  });
+  dlg.el.addEventListener('dragleave', () => {
+    dragDepth--;
+    if (dragDepth <= 0) {
+      dragDepth = 0;
+      dropOverlay.hidden = true;
+    }
+  });
+  dlg.el.addEventListener('drop', async (e) => {
+    e.preventDefault();
+    dragDepth = 0;
+    dropOverlay.hidden = true;
+    const dtFiles = e.dataTransfer ? Array.from(e.dataTransfer.files || []) : [];
+    if (!dtFiles.length) return;
+    for (const f of dtFiles) {
+      const b64 = await new Promise((resolve) => {
+        const reader = new FileReader();
+        reader.onload = () => resolve(reader.result);
+        reader.readAsDataURL(f);
+      });
+      files.push({ name: f.name, size: f.size, dataUrl: b64, path: f.name });
+    }
+    renderAtt();
+    toast(`${dtFiles.length} ${plural(dtFiles.length, 'fichier ajouté', 'fichiers ajoutés')} en pièce jointe.`);
+  });
+
   attachAutocomplete(to);
   attachAutocomplete(cc);
-  (init.to ? body : to).focus();
-  if (init.to) body.setSelectionRange(0, 0);
+  (init.to ? editor : to).focus();
 }
 
 // ----------------------------------------------------------------------- règles
@@ -2710,6 +3091,24 @@ api.on('mail:sorted', ({ moved }) => {
 });
 api.on('account:status', ({ accountId, state: st }) => { state.status[accountId] = st; renderSidebar(); });
 api.on('app:error', ({ message }) => toast(message, { error: true }));
+
+api.on('app:updateAvailable', ({ version }) => {
+  toast(`Une mise à jour (${version}) est disponible. Téléchargement en cours…`);
+});
+
+api.on('app:updateDownloaded', ({ version }) => {
+  toast(`Mise à jour (${version}) prête à être installée !`, {
+    timeout: 30000,
+    actions: [
+      {
+        label: 'Redémarrer et mettre à jour',
+        onClick: () => {
+          if (api.updates && api.updates.install) api.updates.install();
+        },
+      },
+    ],
+  });
+});
 
 $('#btn-compose').addEventListener('click', () => openCompose());
 $('#btn-refresh').addEventListener('click', async () => {

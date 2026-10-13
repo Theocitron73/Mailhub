@@ -1,0 +1,16 @@
+# Dépendances
+node_modules/
+
+# Données locales de test / prévisualisation
+data/
+*.tmp
+*.log
+
+# Fichiers de compilation et de distribution
+dist/
+build/
+.aistudio/
+
+# Système
+.DS_Store
+Thumbs.db

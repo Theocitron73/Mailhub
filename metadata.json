@@ -1,0 +1,9 @@
+{
+  "name": "MailHub",
+  "description": "MailHub - messagerie multi-comptes IMAP avec tri automatique des courriers",
+  "version": "1.0.0",
+  "permissions": [],
+  "capabilities": [
+    "MAJOR_CAPABILITY_SERVER_SIDE_GEMINI_API"
+  ]
+}
