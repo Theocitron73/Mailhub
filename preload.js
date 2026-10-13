@@ -54,6 +54,13 @@ contextBridge.exposeInMainWorld('mailhub', {
     autoSender: (payload) => invoke('rules:autoSender', payload),
     applyToFolder: (accountId, folder) => invoke('rules:applyToFolder', accountId, folder),
     applyAll: (accountId) => invoke('rules:applyAll', accountId),
+    export: () => invoke('rules:export'),
+    importPick: () => invoke('rules:importPick'),
+    duplicates: (items) => invoke('rules:duplicates', items),
+  },
+
+  signatures: {
+    pickImage: () => invoke('signatures:pickImage'),
   },
 
   // carnet d'adresses

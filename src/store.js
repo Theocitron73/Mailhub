@@ -3,6 +3,7 @@
 const fs = require('fs');
 const path = require('path');
 const { upsertSenderRule, newId } = require('./rules');
+const { cleanImage } = require('./signature');
 
 /**
  * Stockage local : comptes, règles, préférences.
@@ -109,6 +110,8 @@ class Store {
         id: String(sg.id || newId()),
         name: String(sg.name || 'Signature').slice(0, 80),
         text: String(sg.text || '').slice(0, 5000),
+        images: (Array.isArray(sg.images) ? sg.images : []).slice(0, 6).map((im) => cleanImage(im)).filter(Boolean)
+          .map((im, i) => ({ ...im, id: im.id || 'i' + i })),
       }));
       const ids = acc.signatures.map((x) => x.id);
       acc.defaultSignature = ids.includes(patch.defaultSignature) ? patch.defaultSignature : '';

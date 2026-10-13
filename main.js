@@ -8,6 +8,8 @@ const {
 
 const { Store } = require('./src/store');
 const { ImapManager, friendlyError } = require('./src/imap');
+const rulesio = require('./src/rulesio');
+const { cleanImage } = require('./src/signature');
 const tb = require('./src/thunderbird');
 
 let mainWindow = null;
@@ -223,6 +225,64 @@ function registerIpc() {
     // le carnet d'adresses retient tous les destinataires (À, Cc, Cci)
     try { store.recordContacts(ImapManager.parseRecipients(mail.to, mail.cc, mail.bcc)); } catch (e) { console.error('Carnet :', e.message); }
     return res;
+  });
+
+  // Signatures : choix d'une image (png, jpg, gif, webp ; 1,5 Mo maximum)
+  handle('signatures:pickImage', async () => {
+    const { canceled, filePaths } = await dialog.showOpenDialog(mainWindow, {
+      title: 'Choisir une image pour la signature',
+      properties: ['openFile'],
+      filters: [{ name: 'Images (png, jpg, gif, webp)', extensions: ['png', 'jpg', 'jpeg', 'gif', 'webp'] }],
+    });
+    if (canceled || !filePaths.length) return null;
+    const file = filePaths[0];
+    const mime = { png: 'image/png', jpg: 'image/jpeg', jpeg: 'image/jpeg', gif: 'image/gif', webp: 'image/webp' }[path.extname(file).slice(1).toLowerCase()];
+    if (!mime) throw new Error('Format d’image non pris en charge (png, jpg, gif ou webp).');
+    const size = fs.statSync(file).size;
+    if (size > 1.5 * 1024 * 1024) throw new Error('Image trop lourde (1,5 Mo maximum). Réduisez-la avant de l’ajouter.');
+    const im = cleanImage({ dataUrl: `data:${mime};base64,${fs.readFileSync(file).toString('base64')}`, name: path.basename(file), id: 'i' + Date.now().toString(36) + Math.random().toString(36).slice(2, 5) });
+    if (!im) throw new Error('Image illisible.');
+    return im;
+  });
+
+  // Export / import des règles de tri
+  handle('rules:export', async () => {
+    const rules = store.listRules();
+    if (!rules.length) throw new Error('Vous n’avez aucune règle à exporter.');
+    const { canceled, filePath } = await dialog.showSaveDialog(mainWindow, {
+      title: 'Exporter les règles de tri',
+      defaultPath: path.join(app.getPath('documents'), 'mailhub-regles.json'),
+      filters: [{ name: 'Règles MailHub (.json)', extensions: ['json'] }],
+    });
+    if (canceled || !filePath) return { saved: false };
+    const data = rulesio.exportRules(rules, store.listAccounts());
+    fs.writeFileSync(filePath, JSON.stringify(data, null, 2), 'utf8');
+    return { saved: true, count: data.rules.length, path: filePath };
+  });
+
+  handle('rules:importPick', async () => {
+    const { canceled, filePaths } = await dialog.showOpenDialog(mainWindow, {
+      title: 'Importer des règles de tri',
+      properties: ['openFile'],
+      filters: [{ name: 'Règles MailHub (.json)', extensions: ['json'] }, { name: 'Tous les fichiers', extensions: ['*'] }],
+    });
+    if (canceled || !filePaths.length) return null;
+    if (fs.statSync(filePaths[0]).size > 5 * 1024 * 1024) throw new Error('Fichier trop volumineux pour un export de règles.');
+    const { rules, skipped } = rulesio.parseRulesFile(fs.readFileSync(filePaths[0], 'utf8'));
+    const accounts = store.listAccounts();
+    const existing = new Set(store.listRules().map((r) => rulesio.ruleKey(r.accountId, r)));
+    const emails = [...new Set(rules.map((r) => r.accountEmail))];
+    const mapping = {};
+    emails.forEach((e) => { const a = accounts.find((x) => x.email.toLowerCase() === e); mapping[e] = a ? a.id : (accounts.length === 1 ? accounts[0].id : ''); });
+    return {
+      file: path.basename(filePaths[0]), skipped, emails, mapping,
+      rules: rules.map((r) => ({ ...r, duplicate: !!mapping[r.accountEmail] && existing.has(rulesio.ruleKey(mapping[r.accountEmail], r)) })),
+    };
+  });
+  // doublons recalculés quand l'utilisateur change l'association d'un compte
+  handle('rules:duplicates', (items) => {
+    const existing = new Set(store.listRules().map((r) => rulesio.ruleKey(r.accountId, r)));
+    return items.map((it) => !!it.accountId && existing.has(rulesio.ruleKey(it.accountId, it)));
   });
 
   // Favoris : messages suivis de tous les comptes

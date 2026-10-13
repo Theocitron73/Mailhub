@@ -7,7 +7,7 @@
   "license": "MIT",
   "scripts": {
     "start": "electron .",
-    "test": "node test/rules.test.js && node test/thunderbird.test.js",
+    "test": "node test/rules.test.js && node test/thunderbird.test.js && node test/rulesio.test.js",
     "dist:win": "electron-builder --win --x64 --publish never",
     "dist:mac": "electron-builder --mac --universal --publish never",
     "dist": "electron-builder --publish never"

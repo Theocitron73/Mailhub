@@ -141,6 +141,7 @@ select { appearance: none; padding-right: 28px;
 
 /* ------------------------------------------------------------------ gabarit */
 #app {
+  position: relative;
   display: grid;
   grid-template-columns: var(--sidebar-w) minmax(0, 1fr);
   height: 100vh;
@@ -467,3 +468,30 @@ details.adv summary { cursor: pointer; font-weight: 600; margin-bottom: 10px; }
 .contact-row:last-child { border-bottom: 0; }
 .contact-row .info { flex: 1; min-width: 0; overflow: hidden; text-overflow: ellipsis; white-space: nowrap; }
 .contact-row small { color: var(--ink-2); margin-left: 8px; }
+
+
+/* ---- barre latérale redimensionnable ---- */
+#sb-splitter { -webkit-app-region: no-drag; position: absolute; top: 0; bottom: 0; left: calc(var(--sidebar-w) - 3px); width: 6px; cursor: col-resize; z-index: 40; outline: none; }
+#sb-splitter::after { content: ''; position: absolute; top: 0; bottom: 0; left: 2px; width: 2px; background: transparent; transition: background .12s; }
+#sb-splitter:hover::after, #sb-splitter.dragging::after, #sb-splitter:focus-visible::after { background: var(--accent); }
+body.view-panel #sb-splitter { display: block; }
+
+/* ---- dossiers par défaut / dossiers ajoutés ---- */
+.folder-group { display: flex; align-items: center; gap: 8px; margin: 12px 4px 4px 10px; font-size: 11px; font-weight: 650; letter-spacing: .06em; text-transform: uppercase; color: var(--ink-3); }
+.folder-group::after { content: ''; flex: 1; height: 1px; background: var(--line); }
+.folder.is-default .name { font-weight: 550; }
+.folder.is-custom .ico { color: var(--accent); }
+.folder.is-custom.colored .ico { color: var(--fc); }
+
+/* ---- signatures : images ---- */
+.sig-images { display: flex; flex-wrap: wrap; align-items: center; gap: 8px; padding: 8px 10px; border: 1px dashed var(--line); border-radius: 8px; }
+.sig-images small { flex-basis: 100%; color: var(--ink-2); }
+.sig-images img { max-height: 54px; max-width: 160px; border-radius: 4px; }
+.sig-imgs { display: grid; gap: 8px; }
+.sig-img { display: flex; align-items: center; gap: 10px; padding: 6px 8px; border: 1px solid var(--line); border-radius: 8px; }
+.sig-img img { width: 56px; height: 40px; object-fit: contain; background: repeating-conic-gradient(var(--panel) 0 25%, var(--surface) 0 50%) 0 0 / 10px 10px; border-radius: 4px; }
+.sig-img .meta { flex: 1; min-width: 0; display: grid; gap: 2px; }
+.sig-img .nm { overflow: hidden; text-overflow: ellipsis; white-space: nowrap; font-weight: 600; }
+.sig-img label { display: flex; align-items: center; gap: 6px; color: var(--ink-2); font-size: 12.5px; }
+.sig-img input[type=number] { width: 70px; height: 26px; padding: 0 6px; }
+.import-item.off { opacity: .6; }

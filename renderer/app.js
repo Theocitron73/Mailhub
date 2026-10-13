@@ -293,7 +293,12 @@ function showMenu(x, y, items) {
   const r = menu.getBoundingClientRect();
   menu.style.left = Math.min(x, window.innerWidth - r.width - 8) + 'px';
   menu.style.top = Math.min(y, window.innerHeight - r.height - 8) + 'px';
-  setTimeout(() => document.addEventListener('mousedown', closeMenu, { once: true }), 0);
+  const outside = (e) => {
+    if (menu.contains(e.target)) return; // le clic sur une entrée doit arriver jusqu'au bouton
+    document.removeEventListener('mousedown', outside, true);
+    closeMenu();
+  };
+  setTimeout(() => document.addEventListener('mousedown', outside, true), 0);
 }
 function closeMenu() { const m = $('#ctx-menu'); if (m) m.remove(); }
 
@@ -336,12 +341,17 @@ function renderSidebar() {
     } else if (!state.folders[acc.id]) {
       list.appendChild(h('div', { class: 'loading', style: 'padding:6px 12px' }, 'Chargement…'));
     } else {
+      let sawCustom = false;
       layoutFolders(acc.id).forEach(({ folder: f, depth, special }) => {
+        if (!special && !sawCustom) {
+          sawCustom = true;
+          list.appendChild(h('div', { class: 'folder-group' }, h('span', null, 'Mes dossiers')));
+        }
         const active = state.view === 'mail' && state.current.accountId === acc.id && state.current.folder === f.path;
         const label = special ? SPECIAL_LABEL[f.specialUse] : f.name;
         const fc = folderColor(acc.id, f.path);
         const row = h('button', {
-          class: `folder depth-${depth}` + (active ? ' active' : '') + (f.unseen ? ' unread' : '') + (f.selectable ? '' : ' disabled') + (fc ? ' colored' : ''),
+          class: `folder depth-${depth}` + (special ? ' is-default' : ' is-custom') + (active ? ' active' : '') + (f.unseen ? ' unread' : '') + (f.selectable ? '' : ' disabled') + (fc ? ' colored' : ''),
           title: f.path,
           vars: fc ? { '--fc': fc } : null,
           'data-account': acc.id, 'data-path': f.path,
@@ -636,6 +646,51 @@ function renderLayoutSwitch() {
     title: l.label, 'aria-label': l.label, 'data-layout': l.id, 'aria-pressed': 'false',
     on: { click: () => setLayout(l.id) },
   }, ico(l.icon, 17))));
+}
+
+function initSidebarSplitter() {
+  const handle = $('#sb-splitter');
+  const root = document.documentElement;
+  const MIN = 190, MAX = 480;
+  const apply = (px) => root.style.setProperty('--sidebar-w', Math.round(Math.max(MIN, Math.min(MAX, px))) + 'px');
+  const current = () => Math.round($('#sidebar').getBoundingClientRect().width);
+  const save = debounce((v) => { api.prefs.set({ sidebarWidth: v }).then((r) => { if (r.ok) state.prefs = r.data; }); }, 300);
+  window.applySidebarWidth = () => { if (state.prefs.sidebarWidth) apply(state.prefs.sidebarWidth); else root.style.removeProperty('--sidebar-w'); };
+
+  handle.addEventListener('pointerdown', (e) => {
+    if (e.button !== 0) return;
+    e.preventDefault();
+    try { handle.setPointerCapture(e.pointerId); } catch { /* sans importance */ }
+    handle.classList.add('dragging');
+    document.body.classList.add('resizing', 'col');
+    const move = (ev) => apply(ev.clientX);
+    const stop = () => {
+      window.removeEventListener('pointermove', move, true);
+      window.removeEventListener('pointerup', stop, true);
+      window.removeEventListener('pointercancel', stop, true);
+      window.removeEventListener('mouseup', stop, true);
+      window.removeEventListener('blur', stop);
+      handle.classList.remove('dragging');
+      document.body.classList.remove('resizing', 'col');
+      save(current());
+    };
+    window.addEventListener('pointermove', move, true);
+    window.addEventListener('pointerup', stop, true);
+    window.addEventListener('pointercancel', stop, true);
+    window.addEventListener('mouseup', stop, true);
+    window.addEventListener('blur', stop);
+  });
+  handle.addEventListener('keydown', (e) => {
+    const step = e.shiftKey ? 48 : 16;
+    if (e.key !== 'ArrowLeft' && e.key !== 'ArrowRight') return;
+    e.preventDefault();
+    apply(current() + (e.key === 'ArrowLeft' ? -step : step));
+    save(current());
+  });
+  handle.addEventListener('dblclick', () => {
+    root.style.removeProperty('--sidebar-w');
+    api.prefs.set({ sidebarWidth: 0 }).then((r) => { if (r.ok) state.prefs = r.data; });
+  });
 }
 
 function initSplitter() {
@@ -1528,7 +1583,13 @@ function attachAutocomplete(input) {
 }
 
 const SIG_DELIM = '\n\n-- \n';
-const sigBlock = (sig) => (sig && sig.text.trim() ? SIG_DELIM + sig.text.replace(/\s+$/, '') : '');
+const SIG_PLACEHOLDER = '(images de la signature)'; // remplacé par les images à l'envoi
+const sigBlock = (sig) => {
+  if (!sig) return '';
+  const text = sig.text.replace(/\s+$/, '');
+  if (text.trim()) return SIG_DELIM + text;
+  return (sig.images || []).length ? SIG_DELIM + SIG_PLACEHOLDER : '';
+};
 
 function openCompose(init = {}) {
   if (!state.accounts.length) { toast('Ajoutez d’abord un compte.', { error: true }); return; }
@@ -1541,6 +1602,7 @@ function openCompose(init = {}) {
   const body = h('textarea', { rows: '12' });
   // signature : insérée au-dessus du texte cité (réponse / transfert), changeable depuis la liste « Signature »
   const sigSel = h('select', { 'aria-label': 'Signature' });
+  const sigImgs = h('div', { class: 'sig-images', hidden: true });
   const sigsOf = () => (accountById(from.value) || {}).signatures || [];
   let currentBlock = '';
   const fillSigSelect = (preferred) => {
@@ -1559,10 +1621,20 @@ function openCompose(init = {}) {
     else if (next) { const pos = body.selectionStart || 0; body.value = v.slice(0, pos) + next + v.slice(pos); }
     currentBlock = next;
   };
+  const drawSigImgs = () => {
+    clear(sigImgs);
+    const sig = sigsOf().find((x) => x.id === sigSel.value);
+    const imgs = sig ? sig.images || [] : [];
+    sigImgs.hidden = !imgs.length;
+    if (!imgs.length) return;
+    sigImgs.appendChild(h('small', null, `${imgs.length} ${plural(imgs.length, 'image', 'images')} de signature, ajoutée${imgs.length > 1 ? 's' : ''} sous la signature à l’envoi :`));
+    imgs.forEach((im) => sigImgs.appendChild(h('img', { src: im.dataUrl, alt: im.name, title: im.name })));
+  };
   fillSigSelect((accountById(from.value) || {}).defaultSignature);
   applySig(true);
-  sigSel.addEventListener('change', () => applySig(false));
-  from.addEventListener('change', () => { fillSigSelect((accountById(from.value) || {}).defaultSignature); applySig(false); });
+  drawSigImgs();
+  sigSel.addEventListener('change', () => { applySig(false); drawSigImgs(); });
+  from.addEventListener('change', () => { fillSigSelect((accountById(from.value) || {}).defaultSignature); applySig(false); drawSigImgs(); });
   let files = [];
   const attBox = h('div', { class: 'att-list' });
   const renderAtt = () => {
@@ -1580,6 +1652,7 @@ function openCompose(init = {}) {
       h('div', { class: 'row-line' }, h('label', null, 'Cc'), cc),
       h('div', { class: 'row-line' }, h('label', null, 'Objet'), subject),
       body,
+      sigImgs,
       h('div', null, h('button', { class: 'subtle', on: { click: async () => {
         try { files = files.concat(await call(api.messages.pickAttachments())); renderAtt(); } catch (err) { dlg.error(err.message); }
       } } }, ico('clip', 16), 'Joindre un fichier'), attBox)),
@@ -1595,6 +1668,7 @@ function openCompose(init = {}) {
             await call(api.messages.send(from.value, {
               to: to.value.trim(), cc: cc.value.trim(), subject: subject.value, text: body.value,
               attachments: files.map((f) => f.path), inReplyTo: init.inReplyTo, references: init.references,
+              signatureId: sigSel.value || undefined, signatureBlock: currentBlock,
             }));
             d.close();
             toast('Message envoyé.');
@@ -1639,6 +1713,8 @@ function renderRulesPanel() {
     h('div', { class: 'toolbar-row' },
       h('button', { class: 'primary', disabled: !state.accounts.length, on: { click: () => openRuleEditor() } }, ico('plus', 16), 'Nouvelle règle'),
       h('button', { class: 'ghost', disabled: !state.accounts.length, on: { click: openThunderbirdImport } }, ico('download', 16), 'Importer depuis Thunderbird'),
+      h('button', { class: 'ghost', disabled: !state.rules.length, title: 'Enregistre vos règles dans un fichier, pour les retrouver sur un autre ordinateur', on: { click: exportRules } }, ico('up', 16), 'Exporter mes règles'),
+      h('button', { class: 'ghost', disabled: !state.accounts.length, title: 'Charge un fichier de règles exporté depuis MailHub', on: { click: openRulesImport } }, ico('download', 16), 'Importer un fichier de règles'),
       h('button', { class: 'ghost', disabled: !state.accounts.length, title: 'Force le tri : applique les règles aux 1000 derniers messages de la boîte de réception de chaque compte', on: { click: async (e) => {
         e.currentTarget.disabled = true;
         try { reportSort(await call(api.rules.applyAll())); await Promise.all(state.accounts.map((a) => loadFolders(a.id))); }
@@ -1863,13 +1939,41 @@ function openSignatures(acc) {
     const cur = sigs.find((x) => x.id === sel);
     if (!cur) { form.appendChild(h('p', { class: 'lead', style: 'margin:0' }, 'Aucune signature pour ce compte. Créez-en une, par exemple « Professionnelle » et « Personnelle ». Vous pourrez choisir laquelle utiliser à chaque nouveau message.')); return; }
     const name = h('input', { type: 'text', value: cur.name, maxlength: '80' });
-    const text = h('textarea', { rows: '8', placeholder: 'Cordialement,\nPrénom Nom' });
+    const text = h('textarea', { rows: '6', placeholder: 'Cordialement,\nPrénom Nom' });
     text.value = cur.text;
+    cur.images = cur.images || [];
+    const imgBox = h('div', { class: 'sig-imgs' });
+    const drawImgs = () => {
+      clear(imgBox);
+      cur.images.forEach((im, i) => {
+        const w = h('input', { type: 'number', min: '16', max: '800', value: String(im.width || 200), 'aria-label': 'Largeur en pixels' });
+        w.addEventListener('input', () => { im.width = Math.max(16, Math.min(800, Number(w.value) || 200)); });
+        imgBox.appendChild(h('div', { class: 'sig-img' },
+          h('img', { src: im.dataUrl, alt: im.name }),
+          h('div', { class: 'meta' }, h('span', { class: 'nm', title: im.name }, im.name), h('label', null, 'Largeur ', w, ' px')),
+          h('button', { class: 'icon-btn', title: 'Retirer l’image', 'aria-label': 'Retirer l’image', on: { click: () => { cur.images.splice(i, 1); drawImgs(); } } }, ico('close', 15))));
+      });
+    };
+    drawImgs();
+    const addImg = h('button', { class: 'subtle', on: { click: async () => {
+      if (cur.images.length >= 6) { dlg.error('6 images au maximum par signature.'); return; }
+      try {
+        const im = await call(api.signatures.pickImage());
+        if (!im) return;
+        dlg.error('');
+        const natural = await new Promise((resolve) => { const t = new Image(); t.onload = () => resolve(t.naturalWidth); t.onerror = () => resolve(200); t.src = im.dataUrl; });
+        im.width = Math.min(natural || 200, 300);
+        cur.images.push(im);
+        drawImgs();
+      } catch (err) { dlg.error(err.message); }
+    } } }, ico('plus', 15), 'Ajouter une image ou un GIF…');
     name.addEventListener('input', () => { cur.name = name.value; const b = listBox.querySelector('button.on span'); if (b) b.textContent = name.value || 'Sans nom'; });
     text.addEventListener('input', () => { cur.text = text.value; });
     form.append(
       h('div', { class: 'field' }, h('label', null, 'Nom (visible dans la liste)'), name),
       h('div', { class: 'field' }, h('label', null, 'Texte de la signature'), text),
+      h('div', { class: 'field' }, h('label', null, 'Images (logo, GIF…)'), imgBox, h('div', null, addImg),
+        h('small', null, 'png, jpg, gif ou webp, 1,5 Mo maximum chacune. Avec des images, le message part en HTML ; les GIF restent animés chez les destinataires qui les affichent.')),
       h('label', { class: 'check' }, h('input', { type: 'checkbox', checked: def === cur.id, on: { change: (e) => { def = e.target.checked ? cur.id : (def === cur.id ? '' : def); draw(); } } }),
         h('span', null, 'Utiliser par défaut pour les nouveaux messages de ce compte')),
       h('div', null, h('button', { class: 'danger', on: { click: () => {
@@ -2035,6 +2139,87 @@ function openAddAccount() {
 
 
 // ------------------------------------------------------ import Thunderbird
+
+async function exportRules() {
+  try {
+    const r = await call(api.rules.export());
+    if (r.saved) toast(`${r.count} ${plural(r.count, 'règle exportée', 'règles exportées')} dans « ${r.path.split(/[\\/]/).pop()} ».`);
+  } catch (err) { toast(err.message, { error: true }); }
+}
+
+async function openRulesImport() {
+  let data;
+  try { data = await call(api.rules.importPick()); } catch (err) { toast(err.message, { error: true }); return; }
+  if (!data) return;
+  if (!data.rules.length) { toast(`Aucune règle valide dans « ${data.file} ».`, { error: true }); return; }
+  const mapping = { ...data.mapping };
+  const items = data.rules.map((r) => ({ ...r }));
+  const boxes = [];
+  const listBox = h('div', { class: 'import-list' });
+  const mapBox = h('div', { class: 'field' });
+  const countLabel = h('span');
+
+  const accOptions = (sel) => [h('option', { value: '' }, 'Ne pas importer'), ...state.accounts.map((a) => h('option', { value: a.id }, `${a.name} <${a.email}>`))];
+  data.emails.forEach((email) => {
+    const sel = h('select', null, accOptions());
+    sel.value = mapping[email] || '';
+    sel.addEventListener('change', async () => { mapping[email] = sel.value; await refresh(); });
+    mapBox.appendChild(h('div', { class: 'row-line', style: 'display:grid;grid-template-columns:1fr 1fr;gap:8px;align-items:center;margin-top:6px' }, h('span', null, email), sel));
+  });
+
+  async function refresh() {
+    const payload = items.map((it) => ({ ...it, accountId: mapping[it.accountEmail] || '' }));
+    let dup = [];
+    try { dup = await call(api.rules.duplicates(payload)); } catch (_) { /* on garde l'affichage */ }
+    clear(listBox);
+    boxes.length = 0;
+    items.forEach((it, i) => {
+      const accId = mapping[it.accountEmail];
+      const skip = !accId;
+      const isDup = !!dup[i];
+      const box = h('input', { type: 'checkbox', checked: !skip && !isDup, disabled: skip });
+      box.addEventListener('change', update);
+      boxes.push(box);
+      listBox.appendChild(h('label', { class: 'import-item' + (skip || isDup ? ' off' : '') }, box,
+        h('div', null,
+          h('div', null, 'Si ', describeRule(it), ' → ', h('span', { class: 'dest' }, ico('folder', 14), it.folder)),
+          h('small', null, skip ? 'Compte non associé' : isDup ? 'Déjà présente' : (it.enabled ? '' : 'Désactivée dans le fichier')))));
+    });
+    update();
+  }
+  function update() {
+    const n = boxes.filter((b) => b.checked).length;
+    countLabel.textContent = `${n} ${plural(n, 'règle sera importée', 'règles seront importées')}`;
+    dlg.buttons.go.disabled = n === 0;
+    dlg.buttons.go.textContent = `Importer ${n} ${plural(n, 'règle', 'règles')}`;
+  }
+
+  const dlg = openDialog({
+    title: 'Importer des règles de tri', large: true,
+    subtitle: `Fichier « ${data.file} » : ${data.rules.length} ${plural(data.rules.length, 'règle', 'règles')}${data.skipped ? `, ${data.skipped} ignorée${data.skipped > 1 ? 's' : ''} (invalide${data.skipped > 1 ? 's' : ''})` : ''}. Les règles sont ajoutées à la suite des vôtres ; un dossier absent sera créé au premier message rangé.`,
+    body: h('div', { style: 'display:grid;gap:12px' },
+      h('div', { class: 'field' }, h('label', null, 'Comptes'), h('small', null, 'Associez chaque adresse du fichier à un compte de cet ordinateur.'), mapBox),
+      listBox, countLabel),
+    buttons: [
+      { label: 'Annuler', onClick: (d) => d.close() },
+      { id: 'go', label: 'Importer', kind: 'primary', onClick: async (d, btn) => {
+        const chosen = items.filter((it, i) => boxes[i] && boxes[i].checked);
+        if (!chosen.length) return;
+        btn.disabled = true;
+        try {
+          await call(api.rules.addMany(chosen.map((it) => ({
+            accountId: mapping[it.accountEmail], name: it.name, enabled: it.enabled, match: it.match, folder: it.folder, conditions: it.conditions, source: 'import',
+          }))));
+          state.rules = await call(api.rules.list());
+          d.close();
+          showPanel('rules');
+          toast(`${chosen.length} ${plural(chosen.length, 'règle importée', 'règles importées')}.`);
+        } catch (err) { btn.disabled = false; d.error(err.message); }
+      } },
+    ],
+  });
+  await refresh();
+}
 
 async function openThunderbirdImport() {
   if (!state.accounts.length) { toast('Ajoutez d’abord un compte.', { error: true }); return; }
@@ -2259,6 +2444,7 @@ window.addEventListener('unhandledrejection', (e) => {
 (async function init() {
   renderLayoutSwitch();
   initSplitter();
+  initSidebarSplitter();
   applyLayout();
   $('#nav-rules').append(ico('rules'), h('span', null, 'Règles de tri'));
   $('#nav-settings').append(ico('gear'), h('span', null, 'Réglages'));
@@ -2273,6 +2459,7 @@ window.addEventListener('unhandledrejection', (e) => {
   try {
     state.prefs = await call(api.prefs.get());
     applySizes();
+    window.applySidebarWidth();
     applyLayout();
     state.accounts = await call(api.accounts.list());
     state.rules = await call(api.rules.list());

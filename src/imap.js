@@ -6,6 +6,7 @@ const { simpleParser } = require('mailparser');
 const nodemailer = require('nodemailer');
 const MailComposer = require('nodemailer/lib/mail-composer');
 const addressparser = require('nodemailer/lib/addressparser');
+const { buildSignedMessage } = require('./signature');
 const { findRule, senderRule, ruleMatches, domainOf } = require('./rules');
 
 // ---------------------------------------------------------------- utilitaires
@@ -664,6 +665,16 @@ class ImapManager extends EventEmitter {
       references: mail.references && mail.references.length ? mail.references : undefined,
       attachments: (mail.attachments || []).map((p) => ({ path: p })),
     };
+    // Signature avec images : les images viennent du compte (jamais de l'interface) et sont intégrées au message
+    if (mail.signatureId) {
+      const sig = (acc.signatures || []).find((s) => s.id === mail.signatureId);
+      const built = sig && sig.images && sig.images.length ? buildSignedMessage(message.text, mail.signatureBlock || '', sig.images) : null;
+      if (built) {
+        message.text = built.text;
+        message.html = built.html;
+        message.attachments = [...built.attachments, ...message.attachments];
+      }
+    }
 
     await transport.sendMail(message);
 

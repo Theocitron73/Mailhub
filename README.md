@@ -18,7 +18,9 @@ automatiquement les nouveaux messages dans vos dossiers.
 - **Couleur des dossiers** : clic droit → « Couleur du dossier… ».
 - **Contenu distant** : Réglages → « Demander à chaque message » (par défaut) ou « Toujours afficher ».
 - **Carnet d'adresses** : MailHub retient les destinataires de vos envois et les propose pendant la saisie (À, Cc). Réglages → importer depuis vos messages envoyés, ou retirer un contact.
-- **Signatures multiples** par compte (Réglages → Signatures…), avec une signature par défaut ; une liste « Signature » dans la rédaction permet d'en changer.
+- **Export / import des règles** (Règles de tri) : « Exporter mes règles » écrit un fichier `.json` ; sur un autre ordinateur, « Importer un fichier de règles » les recharge (association des adresses de compte, doublons repérés et décochés, dossiers manquants créés au premier message rangé).
+- **Colonne de gauche redimensionnable** : glissez son bord (double-clic pour rétablir, flèches du clavier aussi). Les dossiers par défaut (réception, envoyés, corbeille…) sont séparés de « Mes dossiers ».
+- **Signatures multiples** par compte (Réglages → Signatures…), avec une signature par défaut et des **images ou GIF** (logo…, 1,5 Mo maximum chacune ; le message part alors en HTML) ; une liste « Signature » dans la rédaction permet d'en changer.
 - Les réponses reprennent le message d'origine **sans « > »**.
 - **Règles de tri** modifiables, avec ordre de priorité (la première règle qui correspond s'applique ; boutons « Appliquer plus tôt / plus tard ») : expéditeur, destinataire, objet ou domaine, avec « toutes les conditions » ou « au moins une ».
 - **Surveillance en temps réel** (IMAP IDLE) : les nouveaux messages sont triés dès leur arrivée. Le courrier reçu pendant que l'application était fermée est trié au démarrage suivant.
@@ -63,7 +65,9 @@ npm test   # moteur de règles + lecture des filtres Thunderbird
 Les installateurs ne sont **pas signés** tant que vous n'avez pas de certificat, donc :
 
 - **Windows** affiche « Windows a protégé votre ordinateur » (SmartScreen) : cliquez sur *Informations complémentaires*, puis *Exécuter quand même*.
-- **macOS** refuse d'ouvrir l'application téléchargée : faites un clic droit sur MailHub, *Ouvrir*, puis *Ouvrir*. Si macOS la déclare « endommagée », exécutez dans le Terminal : `xattr -cr /Applications/MailHub.app`.
+- **macOS** affiche « Élément "MailHub" non ouvert : Apple n'a pas pu confirmer que… ». Ce n'est pas une panne : l'application n'est pas notarisée par Apple (il faut pour cela un compte développeur payant). Deux façons de l'ouvrir, une seule fois :
+  1. Faites glisser MailHub dans **Applications**, ouvrez-le (le message apparaît, cliquez **Terminé**), puis allez dans **Réglages Système → Confidentialité et sécurité**, descendez jusqu'à « MailHub a été bloqué… » et cliquez **Ouvrir quand même** (mot de passe demandé). Sur macOS 15 (Sequoia) et plus récent, le clic droit → Ouvrir ne suffit plus.
+  2. Ou, dans le Terminal : `xattr -cr /Applications/MailHub.app`, puis ouvrez normalement.
 
 ### Signature (pour supprimer ces avertissements)
 
