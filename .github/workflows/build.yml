@@ -49,6 +49,14 @@ jobs:
         if: runner.os == 'macOS'
         run: npm install dmg-license --no-save
 
+      - name: Préparation environnement macOS (désactivation Spotlight & nettoyage volumes)
+        if: runner.os == 'macOS'
+        run: |
+          sudo mdutil -a -i off || true
+          hdiutil info | grep -o '/Volumes/MailHub.*' | while read -r vol; do
+            hdiutil detach "$vol" -force || true
+          done
+
       # Construction de l'installateur
       - run: npm run ${{ matrix.script }}
         env:
