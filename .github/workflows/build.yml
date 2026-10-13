@@ -21,6 +21,7 @@ jobs:
             script: dist:mac
             files: |
               dist/*.dmg
+              dist/*.zip
     runs-on: ${{ matrix.os }}
     steps:
       - uses: actions/checkout@v4
@@ -32,6 +33,17 @@ jobs:
       - run: npm install
 
       - run: npm test
+
+      - name: Vérifier les ressources d'icônes
+        shell: bash
+        run: |
+          mkdir -p build
+          if [ ! -f "build/icon.icns" ] && [ -f "node_modules/app-builder-lib/templates/icons/proton-native/proton-native.icns" ]; then
+            cp node_modules/app-builder-lib/templates/icons/proton-native/proton-native.icns build/icon.icns
+          fi
+          if [ ! -f "build/icon.png" ] && [ -f "node_modules/app-builder-lib/templates/icons/proton-native/linux/1024x1024.png" ]; then
+            cp node_modules/app-builder-lib/templates/icons/proton-native/linux/1024x1024.png build/icon.png
+          fi
 
       # Construction de l'installateur
       - run: npm run ${{ matrix.script }}

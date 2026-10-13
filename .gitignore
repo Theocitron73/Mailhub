@@ -8,7 +8,6 @@ data/
 
 # Fichiers de compilation et de distribution
 dist/
-build/
 .aistudio/
 
 # Système

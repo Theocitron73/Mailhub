@@ -73,11 +73,15 @@
     },
     "mac": {
       "category": "public.app-category.productivity",
-      "icon": "build/icon.icns",
       "identity": null,
+      "forceCodeSigning": false,
       "target": [
         {
           "target": "dmg",
+          "arch": ["x64", "arm64"]
+        },
+        {
+          "target": "zip",
           "arch": ["x64", "arm64"]
         }
       ],
@@ -86,7 +90,8 @@
       "artifactName": "MailHub-${version}-${arch}.${ext}"
     },
     "dmg": {
-      "title": "MailHub ${version}"
+      "title": "MailHub ${version}",
+      "sign": false
     }
   }
 }
