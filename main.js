@@ -311,6 +311,31 @@ function registerIpc() {
     return im;
   });
 
+  // Export / import des réglages
+  handle('settings:export', async () => {
+    const { canceled, filePath } = await dialog.showSaveDialog(mainWindow, {
+      title: 'Exporter les réglages',
+      defaultPath: path.join(app.getPath('documents'), 'mailhub-settings.json'),
+      filters: [{ name: 'Réglages MailHub (.json)', extensions: ['json'] }],
+    });
+    if (canceled || !filePath) return { saved: false };
+    const data = store.exportSettings();
+    fs.writeFileSync(filePath, JSON.stringify(data, null, 2), 'utf8');
+    return { saved: true, path: filePath };
+  });
+
+  handle('settings:import', async () => {
+    const { canceled, filePaths } = await dialog.showOpenDialog(mainWindow, {
+      title: 'Importer des réglages',
+      properties: ['openFile'],
+      filters: [{ name: 'Réglages MailHub (.json)', extensions: ['json'] }],
+    });
+    if (canceled || !filePaths.length) return null;
+    const data = JSON.parse(fs.readFileSync(filePaths[0], 'utf8'));
+    store.importSettings(data);
+    return { imported: true };
+  });
+
   // Export / import des règles de tri
   handle('rules:export', async () => {
     const rules = store.listRules();

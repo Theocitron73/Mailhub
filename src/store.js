@@ -256,6 +256,23 @@ class Store {
     this._save();
     return this.data.prefs;
   }
+  // ---- Import / Export ----
+  exportSettings() {
+    return {
+      accounts: this.data.accounts.map(({ secret, ...rest }) => rest), // No secrets
+      rules: this.data.rules,
+      prefs: this.data.prefs,
+      contacts: this.data.contacts
+    };
+  }
+
+  importSettings(newSettings) {
+    this.data.accounts = (newSettings.accounts || []).map(acc => ({...acc, secret: ''})); // Password needs to be re-entered
+    this.data.rules = consolidateRules(newSettings.rules || []);
+    this.data.prefs = Object.assign({}, this.data.prefs, newSettings.prefs || {});
+    this.data.contacts = newSettings.contacts || {};
+    this._save();
+  }
 }
 
 const COLORS = ['#6366f1', '#0ea5e9', '#10b981', '#f59e0b', '#ef4444', '#a855f7', '#14b8a6', '#ec4899'];

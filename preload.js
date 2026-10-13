@@ -90,6 +90,11 @@ contextBridge.exposeInMainWorld('mailhub', {
     set: (patch) => invoke('prefs:set', patch),
   },
 
+  settings: {
+    export: () => invoke('settings:export'),
+    import: () => invoke('settings:import'),
+  },
+
   // mises à jour automatiques
   updates: {
     check: () => invoke('updates:check'),

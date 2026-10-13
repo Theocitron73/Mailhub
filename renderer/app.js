@@ -2657,8 +2657,24 @@ async function renderSettingsPanel() {
           btn.disabled = false;
           btn.textContent = 'Vérifier les mises à jour';
         }
-      } } }, 'Vérifier les mises à jour')
-    ),
+      } } }, 'Vérifier les mises à jour')),
+    h('h3', null, 'Sauvegarde et migration'),
+    h('div', { class: 'toolbar-row', style: 'align-items:center; gap:12px; margin-bottom:12px;' },
+      h('button', { class: 'ghost', on: { click: async () => {
+        try {
+          const res = await call(api.settings.export());
+          if (res.saved) toast('Réglages exportés avec succès !');
+        } catch (err) { toast(err.message, { error: true }); }
+      } } }, 'Exporter les réglages'),
+      h('button', { class: 'ghost', on: { click: async () => {
+        try {
+          const res = await call(api.settings.import());
+          if (res.imported) {
+            toast('Réglages importés avec succès ! Redémarrage nécessaire.');
+            window.location.reload();
+          }
+        } catch (err) { toast(err.message, { error: true }); }
+      } } }, 'Importer les réglages')),
     h('h3', null, 'Comptes'),
     !encryption ? h('div', { class: 'notice' }, 'Le chiffrement du système (Trousseau macOS ou Windows) n’est pas disponible : les mots de passe sont enregistrés avec un simple encodage. Utilisez des mots de passe d’application.') : null,
     state.accounts.map((a) => h('div', { class: 'acc-row', vars: { '--acc': a.color } },
