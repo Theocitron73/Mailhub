@@ -361,6 +361,14 @@ function renderSidebar() {
     section.appendChild(h('div', { class: 'account-head', on: { contextmenu: (e) => { e.preventDefault(); showMenu(e.clientX, e.clientY, [
       { label: 'Modifier le compte…', icon: 'gear', onClick: () => openAddAccount(acc) },
       { label: 'Nouveau dossier', icon: 'plus', onClick: () => openNewFolderDialog(acc.id) },
+      { label: 'Tout marquer comme lu', icon: 'mailopen', onClick: async () => {
+        try {
+          await call(api.messages.markAllReadInAccount(acc.id));
+          toast('Tous les messages du compte marqués comme lus.');
+          renderSidebar();
+          if (state.current.accountId === acc.id) loadMessages({ silent: true });
+        } catch (err) { toast(err.message, { error: true }); }
+      }},
     ]); } } },
       h('button', { class: 'toggle', title: open ? 'Replier' : 'Déplier', 'aria-label': open ? 'Replier' : 'Déplier', on: { click: () => { state.open[acc.id] = !open; renderSidebar(); } } }, ico('chevron', 14)),
       h('span', { class: 'swatch' }),
@@ -465,7 +473,7 @@ function openFolderMenu(e, acc, f, special) {
       const ok = await confirmDialog({
         title: `Vider « ${f.name} » ?`,
         body: 'Tous les messages de ce dossier seront définitivement supprimés.',
-        confirmText: 'Vider le dossier',
+        confirm: 'Vider le dossier',
         danger: true,
       });
       if (!ok) return;
@@ -794,6 +802,8 @@ function applySizes() {
   else main.style.removeProperty('--list-w');
   if (state.prefs.listHeight) main.style.setProperty('--list-h', state.prefs.listHeight + 'px');
   else main.style.removeProperty('--list-h');
+  if (state.prefs.listFromWidth) main.style.setProperty('--list-from-w', state.prefs.listFromWidth + 'px');
+  else main.style.removeProperty('--list-from-w');
 }
 
 function applyLayout() {
@@ -2600,6 +2610,12 @@ async function renderSettingsPanel() {
     h('div', { class: 'seg' }, themeBtn('auto', 'Automatique'), themeBtn('light', 'Clair'), themeBtn('dark', 'Sombre'), themeBtn('graphite', 'Graphite')),
     h('h3', null, 'Lecture des messages'),
     h('div', { class: 'seg' }, LAYOUTS.map((l) => h('button', { class: layoutPref() === l.id ? 'on' : '', on: { click: async () => { await setLayout(l.id); renderSettingsPanel(); } } }, l.short))),
+    h('div', { class: 'field', style: 'margin-top:10px' },
+      h('label', null, 'Largeur des correspondants (px)'),
+      h('input', { type: 'number', value: state.prefs.listFromWidth || 230, on: { change: async (e) => {
+        state.prefs = await call(api.prefs.set({ listFromWidth: Number(e.target.value) }));
+        applySizes();
+      } } })),
     h('p', { class: 'lead', style: 'margin:8px 0 0' }, 'Ce choix est aussi disponible en haut de la liste des messages. Un double-clic sur un message l’ouvre en plein écran, quelle que soit la disposition (en mode plein écran, un simple clic sélectionne seulement).'),
     h('h3', null, 'Contenu distant (images des e-mails)'),
     h('div', { class: 'seg' },

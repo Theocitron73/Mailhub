@@ -266,7 +266,7 @@ body.mac .sb-drag { height: 40px; }
 .row .star-btn { opacity: 0; }
 .row:hover .star-btn, .row .star-btn.on { opacity: 1; }
 .mode-bottom .row, .mode-full .row {
-  grid-template-columns: minmax(130px, 230px) minmax(0, 1fr) auto auto;
+  grid-template-columns: var(--list-from-w, minmax(130px, 230px)) minmax(0, 1fr) auto auto;
   grid-template-areas: "from subject marks date";
   align-items: center; gap: 0 16px; padding: 8px 16px 8px 17px;
 }

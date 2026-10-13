@@ -234,6 +234,8 @@ function registerIpc() {
   handle('messages:move', (accountId, folder, uids, dest) => manager.moveMessages(accountId, folder, uids, dest));
   handle('messages:remove', (accountId, folder, uids) => manager.deleteMessages(accountId, folder, uids));
   handle('messages:markAllRead', (accountId, folder) => manager.markAllRead(accountId, folder));
+  handle('messages:markAllReadInAccount', (accountId) => manager.markAllReadInAccount(accountId));
+  handle('messages:deleteAllInFolder', (accountId, folder) => manager.deleteAllInFolder(accountId, folder));
 
   // Boîte de réception unifiée : fusion des boîtes de tous les comptes
   handle('messages:unified', async (limit = 50) => {

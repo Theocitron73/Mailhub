@@ -263,6 +263,16 @@ class ImapManager extends EventEmitter {
     });
   }
 
+  async markAllReadInAccount(accountId) {
+    const { folders } = await this.listFolders(accountId);
+    for (const f of folders) {
+      if (f.selectable) {
+        await this.markAllRead(accountId, f.path).catch(() => {});
+      }
+    }
+    return true;
+  }
+
   async deleteAllInFolder(accountId, folder) {
     return this.withMailbox(accountId, folder, async (client) => {
       const found = await client.search({ all: true }, { uid: true });
