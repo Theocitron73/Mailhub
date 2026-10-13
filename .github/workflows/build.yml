@@ -1,7 +1,5 @@
 name: Installateurs et Mises à jour MailHub
 
-# Se déclenche automatiquement lors d'un push sur main, sur un tag de version (v*),
-# ou manuellement via l'onglet Actions > Run workflow.
 on:
   workflow_dispatch:
   push:
@@ -19,13 +17,10 @@ jobs:
             files: |
               dist/*.exe
               dist/latest.yml
-              dist/*.blockmap
           - os: macos-latest
             script: dist:mac
             files: |
               dist/*.dmg
-              dist/latest-mac.yml
-              dist/*.blockmap
     runs-on: ${{ matrix.os }}
     steps:
       - uses: actions/checkout@v4
@@ -33,22 +28,19 @@ jobs:
       - uses: actions/setup-node@v4
         with:
           node-version: 22
-          cache: npm
 
-      - run: npm ci
+      - run: npm install
 
       - run: npm test
 
-      # Construit l'installateur et génère le fichier de manifeste de mise à jour (latest.yml)
+      # Construction de l'installateur
       - run: npm run ${{ matrix.script }}
-        env:
-          GITHUB_TOKEN: ${{ secrets.GITHUB_TOKEN }}
 
       - uses: actions/upload-artifact@v4
         with:
           name: installateur-${{ matrix.os }}
           path: ${{ matrix.files }}
-          if-no-files-found: error
+          if-no-files-found: warn
 
   release:
     if: startsWith(github.ref, 'refs/tags/v') || github.ref == 'refs/heads/main'

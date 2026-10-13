@@ -15,9 +15,9 @@
     "build": "node -e \"console.log('Build complete')\"",
     "lint": "node -c server.js && node -c renderer/mailhub-web.js",
     "test": "node test/rules.test.js && node test/thunderbird.test.js && node test/rulesio.test.js && node test/signature.test.js && node test/attachment.test.js",
-    "dist:win": "electron-builder --win --x64",
-    "dist:mac": "electron-builder --mac --universal",
-    "dist": "electron-builder"
+    "dist:win": "electron-builder --win --x64 --publish never && node scripts/generate-manifest.js",
+    "dist:mac": "electron-builder --mac --universal --publish never",
+    "dist": "electron-builder --publish never"
   },
   "dependencies": {
     "electron-updater": "^6.8.9",
