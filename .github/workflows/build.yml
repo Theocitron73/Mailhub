@@ -45,6 +45,10 @@ jobs:
             cp node_modules/app-builder-lib/templates/icons/proton-native/linux/1024x1024.png build/icon.png
           fi
 
+      - name: Dépendances macOS (dmg-license)
+        if: runner.os == 'macOS'
+        run: npm install dmg-license --no-save
+
       # Construction de l'installateur
       - run: npm run ${{ matrix.script }}
         env:

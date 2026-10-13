@@ -12,6 +12,7 @@
         "nodemailer": "^6.9.14",
       },
       "devDependencies": {
+        "dmg-license": "^1.0.11",
         "electron": "^33.2.0",
         "electron-builder": "^25.1.8",
       },
