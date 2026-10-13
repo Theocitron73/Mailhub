@@ -166,6 +166,7 @@ function registerIpc() {
     manager.startWatching(account.id);
     return account;
   });
+  handle('accounts:update', (id, patch) => store.updateAccount(id, patch || {}));
   handle('accounts:remove', async (id) => {
     await manager.disconnect(id);
     store.removeAccount(id);
@@ -217,7 +218,37 @@ function registerIpc() {
     return filePaths.map((p) => ({ path: p, name: path.basename(p), size: fs.statSync(p).size }));
   });
 
-  handle('messages:send', (accountId, mail) => manager.send(accountId, mail));
+  handle('messages:send', async (accountId, mail) => {
+    const res = await manager.send(accountId, mail);
+    // le carnet d'adresses retient tous les destinataires (À, Cc, Cci)
+    try { store.recordContacts(ImapManager.parseRecipients(mail.to, mail.cc, mail.bcc)); } catch (e) { console.error('Carnet :', e.message); }
+    return res;
+  });
+
+  // Favoris : messages suivis de tous les comptes
+  handle('messages:flagged', async () => {
+    const results = await Promise.all(store.listAccounts().map(async (acc) => {
+      try { return (await manager.listFlagged(acc.id)).map((m) => ({ ...m, accountId: acc.id })); } catch (_) { return []; }
+    }));
+    return results.flat().sort((a, b) => new Date(b.date) - new Date(a.date)).slice(0, 300);
+  });
+
+  // ---- carnet d'adresses
+  handle('contacts:list', () => store.listContacts());
+  handle('contacts:remove', (email) => { store.removeContact(email); return store.listContacts(); });
+  handle('contacts:importSent', async () => {
+    let scanned = 0;
+    let added = 0;
+    for (const acc of store.listAccounts()) {
+      try {
+        const list = await manager.sentRecipients(acc.id);
+        scanned += list.length;
+        // un seul passage par adresse et par message : bump 1
+        for (const c of list) added += store.recordContacts([c], { when: c.when });
+      } catch (e) { console.error('Import Envoyés :', e.message); }
+    }
+    return { scanned, added, contacts: store.listContacts() };
+  });
 
   // ---- règles
   handle('rules:list', () => store.listRules());
@@ -295,6 +326,19 @@ function registerIpc() {
   });
 
   handle('rules:applyToFolder', (accountId, folder) => manager.applyRulesToFolder(accountId, folder));
+  // « Trier maintenant » : boîte de réception de chaque compte (ou d'un seul)
+  handle('rules:applyAll', async (accountId) => {
+    const ids = accountId ? [accountId] : store.listAccounts().map((a) => a.id);
+    const total = { moved: 0, scanned: 0, failed: [], accounts: ids.length, noRules: true };
+    for (const id of ids) {
+      try {
+        const r = await manager.applyRulesToFolder(id, 'INBOX');
+        total.moved += r.moved; total.scanned += r.scanned || 0; total.failed.push(...(r.failed || []));
+        if (!r.noRules) total.noRules = false;
+      } catch (e) { total.failed.push({ folder: 'INBOX', count: 0, message: friendlyError(e) }); }
+    }
+    return total;
+  });
 
   // ---- préférences
   handle('prefs:get', () => store.getPrefs());

@@ -93,6 +93,7 @@ const state = {
   anchor: null,
   opened: null,       // { msg, detail, loading, error, allowRemote }
   rules: [],
+  contacts: [],
   view: 'mail',       // mail | rules | settings | welcome
   expanded: false,    // message ouvert en plein écran par double-clic
   reading: false,     // le panneau de lecture occupe toute la zone
@@ -109,7 +110,7 @@ const accColor = (id) => (accountById(id) || {}).color || 'var(--line)';
 const SPECIAL_ORDER = ['\\Inbox', '\\Drafts', '\\Sent', '\\Archive', '\\All', '\\Flagged', '\\Junk', '\\Trash'];
 const SPECIAL_LABEL = {
   '\\Inbox': 'Boîte de réception', '\\Drafts': 'Brouillons', '\\Sent': 'Envoyés', '\\Archive': 'Archives',
-  '\\All': 'Tous les messages', '\\Flagged': 'Suivis', '\\Junk': 'Courrier indésirable', '\\Trash': 'Corbeille',
+  '\\All': 'Tous les messages', '\\Flagged': 'Favoris', '\\Junk': 'Courrier indésirable', '\\Trash': 'Corbeille',
 };
 const SPECIAL_ICON = {
   '\\Inbox': 'inbox', '\\Drafts': 'draft', '\\Sent': 'send', '\\Archive': 'archive',
@@ -119,6 +120,16 @@ const SPECIAL_ICON = {
 function folderInfo(accountId, path) {
   const info = state.folders[accountId];
   return info ? info.folders.find((f) => f.path === path) : null;
+}
+
+const FOLDER_COLORS = ['#e5484d', '#f76b15', '#f5a524', '#30a46c', '#12a594', '#0091ff', '#5b5bd6', '#8e4ec6', '#d6409f', '#6f6e77'];
+const folderColorKey = (accountId, path) => `${accountId}|${path}`;
+const folderColor = (accountId, path) => (state.prefs.folderColors || {})[folderColorKey(accountId, path)] || '';
+async function setFolderColor(accountId, path, color) {
+  const map = { ...(state.prefs.folderColors || {}) };
+  if (color) map[folderColorKey(accountId, path)] = color; else delete map[folderColorKey(accountId, path)];
+  state.prefs = await call(api.prefs.set({ folderColors: map }));
+  renderSidebar();
 }
 
 function folderLabel(accountId, path) {
@@ -300,6 +311,12 @@ function renderSidebar() {
     on: { click: () => selectFolder('unified', 'INBOX') },
   }, ico('layers'), h('span', { class: 'name' }, 'Boîte unifiée'), unseen ? h('span', { class: 'count' }, unseen) : null));
 
+  const isFav = state.view === 'mail' && state.current.accountId === 'favorites';
+  nav.appendChild(h('button', {
+    class: 'folder' + (isFav ? ' active' : ''), title: 'Messages marqués d’une étoile, tous comptes confondus',
+    on: { click: () => selectFolder('favorites', '') },
+  }, ico('star'), h('span', { class: 'name' }, 'Favoris')));
+
   state.accounts.forEach((acc) => {
     const open = state.open[acc.id] !== false;
     const status = state.status[acc.id] || '';
@@ -322,9 +339,11 @@ function renderSidebar() {
       layoutFolders(acc.id).forEach(({ folder: f, depth, special }) => {
         const active = state.view === 'mail' && state.current.accountId === acc.id && state.current.folder === f.path;
         const label = special ? SPECIAL_LABEL[f.specialUse] : f.name;
+        const fc = folderColor(acc.id, f.path);
         const row = h('button', {
-          class: `folder depth-${depth}` + (active ? ' active' : '') + (f.unseen ? ' unread' : '') + (f.selectable ? '' : ' disabled'),
+          class: `folder depth-${depth}` + (active ? ' active' : '') + (f.unseen ? ' unread' : '') + (f.selectable ? '' : ' disabled') + (fc ? ' colored' : ''),
           title: f.path,
+          vars: fc ? { '--fc': fc } : null,
           'data-account': acc.id, 'data-path': f.path,
           on: {
             click: () => f.selectable && selectFolder(acc.id, f.path),
@@ -357,6 +376,7 @@ function openFolderMenu(e, acc, f, special) {
   const items = [
     { label: 'Nouveau sous-dossier', icon: 'plus', onClick: () => openNewFolderDialog(acc.id, f.path) },
     { label: 'Appliquer les règles de tri', icon: 'rules', onClick: () => applyRules(acc.id, f.path) },
+    { label: 'Couleur du dossier…', icon: 'palette', onClick: () => openColorDialog(acc, f, special) },
   ];
   if (!special && f.path.toUpperCase() !== 'INBOX') {
     items.push({ label: 'Renommer', icon: 'pencil', onClick: () => renameFolder(acc, f) });
@@ -365,13 +385,57 @@ function openFolderMenu(e, acc, f, special) {
   showMenu(e.clientX, e.clientY, items);
 }
 
+function reportSort(res) {
+  const failed = res.failed || [];
+  if (res.noRules) { toast('Vous n’avez aucune règle active : créez-en une (ou glissez un message dans un dossier).', { error: true }); return; }
+  const base = res.moved
+    ? `${res.moved} ${plural(res.moved, 'message rangé', 'messages rangés')} selon vos règles (${res.scanned} examinés).`
+    : `Aucun message ne correspond à vos règles (${res.scanned} examinés).`;
+  if (failed.length) {
+    toast(`${base} Échec : ${failed.map((f) => `« ${f.folder} » (${f.message})`).join(' ; ')}`, { error: true, timeout: 12000 });
+  } else toast(base);
+}
+
 async function applyRules(accountId, folder) {
   try {
     const res = await call(api.rules.applyToFolder(accountId, folder));
-    toast(res.moved ? `${res.moved} ${plural(res.moved, 'message rangé', 'messages rangés')} selon vos règles.` : 'Aucun message ne correspond à vos règles.');
+    reportSort(res);
     await loadFolders(accountId);
-    if (state.current.accountId === accountId || state.current.accountId === 'unified') loadMessages({ silent: true });
+    if (['unified', 'favorites', accountId].includes(state.current.accountId)) loadMessages({ silent: true });
   } catch (err) { toast(err.message, { error: true }); }
+}
+
+// « Trier maintenant » : force l'application des règles, sans attendre l'arrivée d'un message
+async function sortNow() {
+  const { accountId, folder } = state.current;
+  const btn = $('#btn-sortnow');
+  btn.disabled = true;
+  try {
+    let res;
+    if (accountId === 'unified' || accountId === 'favorites') res = await call(api.rules.applyAll());
+    else res = await call(api.rules.applyToFolder(accountId, folder));
+    reportSort(res);
+    await Promise.all(state.accounts.map((a) => loadFolders(a.id)));
+    await loadMessages({ silent: true });
+  } catch (err) { toast(err.message, { error: true }); }
+  finally { btn.disabled = false; }
+}
+
+function openColorDialog(acc, f, special) {
+  const current = folderColor(acc.id, f.path);
+  const label = special ? SPECIAL_LABEL[f.specialUse] : f.name;
+  const grid = h('div', { class: 'color-grid' });
+  const dlg = openDialog({
+    title: `Couleur de « ${label} »`, subtitle: 'La couleur colore l’icône du dossier dans la barre latérale.',
+    body: grid, buttons: [{ label: 'Fermer', onClick: (d) => d.close() }],
+  });
+  const pick = async (c) => {
+    try { await setFolderColor(acc.id, f.path, c); dlg.close(); } catch (err) { dlg.error(err.message); }
+  };
+  FOLDER_COLORS.forEach((c) => grid.appendChild(h('button', {
+    class: 'color-dot' + (c === current ? ' on' : ''), vars: { '--c': c }, title: c, 'aria-label': 'Couleur ' + c, on: { click: () => pick(c) },
+  })));
+  grid.appendChild(h('button', { class: 'color-dot none' + (!current ? ' on' : ''), title: 'Aucune couleur', on: { click: () => pick('') } }, 'Aucune'));
 }
 
 async function renameFolder(acc, f) {
@@ -386,6 +450,18 @@ async function renameFolder(acc, f) {
       await call(api.rules.update({ ...r, folder: to + r.folder.slice(f.path.length) }));
     }
     state.rules = await call(api.rules.list());
+    const colors = { ...(state.prefs.folderColors || {}) };
+    let moved = false;
+    for (const key of Object.keys(colors)) {
+      const [aid, ...rest] = key.split('|');
+      const fp = rest.join('|');
+      if (aid === acc.id && (fp === f.path || fp.startsWith(f.path + f.delimiter))) {
+        colors[`${aid}|${to}${fp.slice(f.path.length)}`] = colors[key];
+        delete colors[key];
+        moved = true;
+      }
+    }
+    if (moved) state.prefs = await call(api.prefs.set({ folderColors: colors }));
     if (state.current.accountId === acc.id && state.current.folder === f.path) state.current.folder = to;
     await loadFolders(acc.id);
     toast(`Dossier renommé en « ${name} ».`);
@@ -405,6 +481,7 @@ async function deleteFolder(acc, f) {
       await call(api.rules.update({ ...r, enabled: false }));
     }
     state.rules = await call(api.rules.list());
+    if (folderColor(acc.id, f.path)) await setFolderColor(acc.id, f.path, '');
     if (state.current.accountId === acc.id && state.current.folder === f.path) { await selectFolder(acc.id, 'INBOX'); }
     await loadFolders(acc.id);
     toast(`Dossier « ${f.name} » supprimé.`);
@@ -478,7 +555,11 @@ async function selectFolder(accountId, folder) {
 
 function updateTitle() {
   const { accountId, folder } = state.current;
-  $('#list-title').textContent = accountId === 'unified' ? 'Boîte unifiée' : folderLabel(accountId, folder);
+  $('#list-title').textContent = accountId === 'unified' ? 'Boîte unifiée' : accountId === 'favorites' ? 'Favoris' : folderLabel(accountId, folder);
+  $('#btn-sortnow').hidden = accountId === 'favorites';
+  $('#btn-sortnow').title = accountId === 'unified'
+    ? 'Applique vos règles de tri à la boîte de réception de chaque compte'
+    : 'Applique vos règles de tri aux messages déjà présents dans ce dossier';
 }
 
 // Une seule source de vérité : la classe du body décide quelle vue est visible.
@@ -641,7 +722,12 @@ async function loadMessages({ append = false, silent = false } = {}) {
   try {
     let messages = [];
     let total = 0;
-    if (accountId === 'unified') {
+    if (accountId === 'favorites') {
+      const all = await call(api.messages.flagged());
+      const q = state.query.toLowerCase();
+      messages = q ? all.filter((m) => `${m.fromName} ${m.from} ${m.subject}`.toLowerCase().includes(q)) : all;
+      total = messages.length;
+    } else if (accountId === 'unified') {
       if (state.query) {
         const parts = await Promise.all(state.accounts.map(async (a) => {
           try {
@@ -649,7 +735,7 @@ async function loadMessages({ append = false, silent = false } = {}) {
             return r.messages.map((m) => ({ ...m, accountId: a.id, folder: 'INBOX' }));
           } catch (_) { return []; }
         }));
-        messages = parts.flat().sort((a, b) => new Date(b.date) - new Date(a.date));
+        messages = parts.flat();
       } else {
         const data = await call(api.messages.unified(60));
         messages = data.map((m) => ({ ...m, folder: 'INBOX' }));
@@ -667,7 +753,7 @@ async function loadMessages({ append = false, silent = false } = {}) {
       if (append) messages = [...state.messages, ...messages];
     }
     if (token !== loadToken) return;
-    state.messages = messages;
+    state.messages = sortMessages(messages);
     state.total = total;
     state.error = '';
     // on garde uniquement les sélections qui existent encore
@@ -681,12 +767,62 @@ async function loadMessages({ append = false, silent = false } = {}) {
   }
 }
 
+// ---- tri de la liste (date, correspondant, objet) ----
+const SORTS = ['date', 'from', 'subject'];
+const sortBy = () => (SORTS.includes(state.prefs.sortBy) ? state.prefs.sortBy : 'date');
+const sortDir = () => (state.prefs.sortDir === 'asc' ? 'asc' : (state.prefs.sortDir === 'desc' || sortBy() === 'date' ? 'desc' : 'asc'));
+
+// Dans Envoyés et Brouillons, le « correspondant » est le destinataire
+function isOutgoing(m) {
+  const f = folderInfo(m.accountId, m.folder);
+  return !!f && (f.specialUse === '\\Sent' || f.specialUse === '\\Drafts');
+}
+function correspondentLabel(m) {
+  if (isOutgoing(m)) {
+    const list = String(m.to || '').split(',').map((x) => x.trim()).filter(Boolean);
+    if (!list.length) return '(sans destinataire)';
+    return 'À : ' + list[0] + (list.length > 1 ? ` +${list.length - 1}` : '');
+  }
+  return m.fromName || m.from || '(inconnu)';
+}
+const collator = new Intl.Collator('fr', { sensitivity: 'base', numeric: true });
+function sortMessages(list) {
+  const by = sortBy();
+  const dir = sortDir() === 'asc' ? 1 : -1;
+  const keyOfMsg = (m) => by === 'from'
+    ? (isOutgoing(m) ? String(m.to || '').split(',')[0] : (m.fromName || m.from || '')).trim()
+    : by === 'subject' ? String(m.subject || '').replace(/^\s*((re|réf|tr|fwd?|fw)\s*:\s*)+/i, '').trim() : '';
+  return list.map((m, i) => ({ m, i })).sort((a, b) => {
+    let c = by === 'date' ? new Date(a.m.date) - new Date(b.m.date) : collator.compare(keyOfMsg(a.m), keyOfMsg(b.m));
+    if (c === 0) c = new Date(b.m.date) - new Date(a.m.date) || a.i - b.i; // à égalité : le plus récent d'abord
+    else c *= dir;
+    return by === 'date' ? c : c;
+  }).map((x) => x.m);
+}
+function renderSortRow() {
+  $('#sort-by').value = sortBy();
+  const asc = sortDir() === 'asc';
+  const btn = $('#sort-dir');
+  clear(btn);
+  btn.appendChild(ico(asc ? 'up' : 'down', 16));
+  const labels = { date: asc ? 'Du plus ancien au plus récent' : 'Du plus récent au plus ancien', from: asc ? 'A → Z' : 'Z → A', subject: asc ? 'A → Z' : 'Z → A' };
+  btn.title = labels[sortBy()] + ' (cliquer pour inverser)';
+  const partial = sortBy() !== 'date' && !state.query && !['unified', 'favorites'].includes(state.current.accountId) && state.messages.length < state.total;
+  $('#sort-note').textContent = partial ? `parmi les ${state.messages.length} chargés` : '';
+}
+async function setSort(by, dir) {
+  try { state.prefs = await call(api.prefs.set({ sortBy: by, sortDir: dir })); } catch (err) { toast(err.message, { error: true }); return; }
+  state.messages = sortMessages(state.messages);
+  renderList();
+}
+
 function renderList() {
   const rows = $('#list-rows');
   const top = rows.scrollTop;
   clear(rows);
-  const unified = state.current.accountId === 'unified';
+  const unified = state.current.accountId === 'unified' || state.current.accountId === 'favorites';
 
+  renderSortRow();
   renderSelectionBar();
 
   if (state.loading && !state.messages.length) {
@@ -700,8 +836,8 @@ function renderList() {
   }
   if (!state.messages.length) {
     rows.appendChild(h('div', { class: 'empty' },
-      h('h2', null, state.query ? 'Aucun résultat' : 'Ce dossier est vide'),
-      h('p', null, state.query ? `Aucun message ne contient « ${state.query} » dans l’expéditeur, le destinataire ou l’objet.` : 'Les nouveaux messages apparaîtront ici dès leur arrivée.')));
+      h('h2', null, state.query ? 'Aucun résultat' : state.current.accountId === 'favorites' ? 'Aucun favori' : 'Ce dossier est vide'),
+      h('p', null, state.query ? `Aucun message ne contient « ${state.query} » dans l’expéditeur, le destinataire ou l’objet.` : state.current.accountId === 'favorites' ? 'Cliquez sur l’étoile d’un message pour le retrouver ici, quel que soit son dossier.' : 'Les nouveaux messages apparaîtront ici dès leur arrivée.')));
     return;
   }
 
@@ -719,13 +855,13 @@ function renderList() {
         dragend: () => { row.classList.remove('dragging'); hideDragHint(); },
       },
     },
-    h('div', { class: 'from' }, h('span', { class: 'dot' }), h('span', { class: 'who' }, m.fromName || m.from || '(inconnu)')),
+    h('div', { class: 'from' }, h('span', { class: 'dot' }), h('span', { class: 'who' }, correspondentLabel(m))),
     h('div', { class: 'date' }, fmtDate(m.date)),
     h('div', { class: 'subject' }, m.subject),
     h('div', { class: 'marks' },
       m.hasAttachment ? h('span', { title: 'Pièce jointe' }, ico('clip', 15)) : null,
       h('button', {
-        class: 'icon-btn star-btn' + (m.flagged ? ' on' : ''), title: m.flagged ? 'Retirer le suivi' : 'Suivre', 'aria-label': 'Suivre',
+        class: 'icon-btn star-btn' + (m.flagged ? ' on' : ''), title: m.flagged ? 'Retirer des favoris' : 'Ajouter aux favoris', 'aria-label': m.flagged ? 'Retirer des favoris' : 'Ajouter aux favoris',
         style: m.flagged ? '--star-fill: currentColor' : '',
         on: { click: (e) => { e.stopPropagation(); toggleFlag(m); } },
       }, ico('star', 16))),
@@ -733,7 +869,7 @@ function renderList() {
     rows.appendChild(row);
   });
 
-  if (!state.query && state.current.accountId !== 'unified' && state.messages.length < state.total) {
+  if (!state.query && !['unified', 'favorites'].includes(state.current.accountId) && state.messages.length < state.total) {
     rows.appendChild(h('div', { class: 'more-row' },
       h('button', { class: 'ghost', on: { click: () => loadMessages({ append: true }) } }, `Charger plus (${state.total - state.messages.length} restants)`)));
   }
@@ -777,6 +913,8 @@ function onRowClick(e, m) {
     }
   }
   selectOnly(m);
+  // Mode « plein écran » : un simple clic sélectionne seulement, c'est le double-clic qui ouvre.
+  if (layoutPref() === 'full') { renderList(); return; }
   // même message déjà ouvert (premier clic d'un double-clic) : on ne recharge pas
   if (state.opened && keyOf(state.opened.msg) === key && !state.opened.error) { renderList(); return; }
   openMessage(m);
@@ -784,7 +922,6 @@ function onRowClick(e, m) {
 
 // Double-clic : le message passe en plein écran, quelle que soit la disposition
 function onRowDblClick(m) {
-  if (layoutPref() === 'full') return;
   selectOnly(m);
   state.expanded = true;
   if (!state.opened || keyOf(state.opened.msg) !== keyOf(m)) { openMessage(m); return; }
@@ -825,8 +962,10 @@ async function toggleFlag(m) {
   const on = !m.flagged;
   m.flagged = on;
   renderList();
-  try { await call(api.messages.flag(m.accountId, m.folder, [m.uid], 'flagged', on)); }
-  catch (err) { m.flagged = !on; renderList(); toast(err.message, { error: true }); }
+  try {
+    await call(api.messages.flag(m.accountId, m.folder, [m.uid], 'flagged', on));
+    if (!on && state.current.accountId === 'favorites') { state.messages = state.messages.filter((x) => x !== m); state.sel.delete(keyOf(m)); renderList(); }
+  } catch (err) { m.flagged = !on; renderList(); toast(err.message, { error: true }); }
 }
 
 function groupByFolder(msgs) {
@@ -1155,7 +1294,7 @@ function openFilePicker(msgs) {
 // -------------------------------------------------------------------- lecture
 
 async function openMessage(m) {
-  state.opened = { msg: m, detail: null, loading: true, error: '', allowRemote: false };
+  state.opened = { msg: m, detail: null, loading: true, error: '', allowRemote: state.prefs.remoteContent === 'always' };
   renderList();
   renderReader();
   const mine = state.opened;
@@ -1253,6 +1392,12 @@ function renderReaderContent() {
         h('div', { class: 'recipients' }, 'À ' + (d.to.map(fmtAddr).join(', ') || (acc ? acc.email : '')), d.cc.length ? ' · Cc ' + d.cc.map(fmtAddr).join(', ') : '')),
       h('div', null,
         h('div', { class: 'reader-actions' },
+          (() => {
+            const b = h('button', { class: 'icon-btn' + (m.flagged ? ' star-on' : ''), title: 'Favori', 'aria-label': 'Favori', 'aria-pressed': String(!!m.flagged) });
+            b.appendChild(ico('star'));
+            b.addEventListener('click', async () => { await toggleFlag(m); b.classList.toggle('star-on', !!m.flagged); b.setAttribute('aria-pressed', String(!!m.flagged)); });
+            return b;
+          })(),
           h('button', { class: 'icon-btn', title: 'Répondre', 'aria-label': 'Répondre', on: { click: () => replyTo(o) } }, ico('reply')),
           h('button', { class: 'icon-btn', title: 'Transférer', 'aria-label': 'Transférer', on: { click: () => forward(o) } }, ico('forward')),
           h('button', { class: 'icon-btn', title: 'Marquer comme non lu', 'aria-label': 'Marquer comme non lu', on: { click: () => setSeen([m], false) } }, ico('mailopen')),
@@ -1296,7 +1441,9 @@ async function saveAttachment(m, a) {
 function quoteText(d) {
   const who = d.from.name || d.from.address;
   const head = `Le ${dfFull.format(new Date(d.date))}, ${who} a écrit :`;
-  return '\n\n' + head + '\n' + (d.text || '').split('\n').map((l) => '> ' + l).join('\n');
+  // Texte du message d'origine repris tel quel, sans « > » (on retire aussi ceux des citations imbriquées)
+  const original = (d.text || '').split('\n').map((l) => l.replace(/^(?:\s*>)+ ?/, '')).join('\n').replace(/\s+$/, '');
+  return '\n\n' + head + '\n\n' + original;
 }
 
 function replyTo(o) {
@@ -1322,16 +1469,100 @@ function forward(o) {
   });
 }
 
+// Autocomplétion des destinataires à partir du carnet d'adresses
+function attachAutocomplete(input) {
+  const box = h('div', { class: 'suggest', hidden: true, role: 'listbox' });
+  input.parentNode.appendChild(box);
+  let items = [];
+  let active = 0;
+  const tokenStart = () => Math.max(input.value.lastIndexOf(',', input.selectionStart - 1), input.value.lastIndexOf(';', input.selectionStart - 1)) + 1;
+  const hide = () => { box.hidden = true; items = []; };
+  const norm = (t) => String(t).toLowerCase().normalize('NFD').replace(/[\u0300-\u036f]/g, '');
+  function show() {
+    const q = norm(input.value.slice(tokenStart(), input.selectionStart).trim());
+    if (q.length < 1) { hide(); return; }
+    const taken = new Set(input.value.toLowerCase().match(/[^\s,;<>"]+@[^\s,;<>"]+/g) || []);
+    const scored = [];
+    for (const c of state.contacts) {
+      if (taken.has(c.email)) continue;
+      const mail = c.email, name = norm(c.name || '');
+      let score = -1;
+      if (mail.startsWith(q)) score = 3;
+      else if (name.startsWith(q) || name.split(/\s+/).some((w) => w.startsWith(q))) score = 3;
+      else if (mail.includes(q) || name.includes(q)) score = 1;
+      if (score >= 0) scored.push({ c, score });
+    }
+    scored.sort((a, b) => b.score - a.score || b.c.count - a.c.count || (b.c.last || '').localeCompare(a.c.last || ''));
+    items = scored.slice(0, 7).map((x) => x.c);
+    active = 0;
+    draw();
+  }
+  function draw() {
+    clear(box);
+    if (!items.length) { box.hidden = true; return; }
+    items.forEach((c, i) => box.appendChild(h('button', {
+      type: 'button', class: i === active ? 'on' : '', role: 'option', 'aria-selected': String(i === active),
+      on: { mousedown: (e) => { e.preventDefault(); choose(c); } },
+    }, c.name ? h('span', { class: 's-name' }, c.name) : null, h('span', c.name ? { class: 's-mail' } : { class: 's-name' }, c.email))));
+    box.hidden = false;
+  }
+  function choose(c) {
+    const start = tokenStart();
+    const before = input.value.slice(0, start).replace(/\s*$/, '');
+    const after = input.value.slice(input.selectionStart).replace(/^\s*[,;]?\s*/, '');
+    const label = c.name ? `"${c.name.replace(/["<>,;]/g, ' ').replace(/\s+/g, ' ').trim()}" <${c.email}>` : c.email;
+    input.value = (before ? before + ' ' : '') + label + ', ' + after;
+    const pos = input.value.length - after.length;
+    input.setSelectionRange(pos, pos);
+    hide();
+  }
+  input.addEventListener('input', show);
+  input.addEventListener('blur', () => setTimeout(hide, 120));
+  input.addEventListener('keydown', (e) => {
+    if (box.hidden || !items.length) return;
+    if (e.key === 'ArrowDown') { e.preventDefault(); active = (active + 1) % items.length; draw(); }
+    else if (e.key === 'ArrowUp') { e.preventDefault(); active = (active - 1 + items.length) % items.length; draw(); }
+    else if (e.key === 'Enter' || e.key === 'Tab') { e.preventDefault(); choose(items[active]); }
+    else if (e.key === 'Escape') { e.stopPropagation(); hide(); }
+  }, true);
+}
+
+const SIG_DELIM = '\n\n-- \n';
+const sigBlock = (sig) => (sig && sig.text.trim() ? SIG_DELIM + sig.text.replace(/\s+$/, '') : '');
+
 function openCompose(init = {}) {
   if (!state.accounts.length) { toast('Ajoutez d’abord un compte.', { error: true }); return; }
-  const defaultAcc = init.accountId || (state.current.accountId !== 'unified' ? state.current.accountId : state.accounts[0].id);
+  const defaultAcc = init.accountId || (!['unified', 'favorites'].includes(state.current.accountId) ? state.current.accountId : state.accounts[0].id);
   const from = h('select', null, state.accounts.map((a) => h('option', { value: a.id }, `${a.name} <${a.email}>`)));
   from.value = defaultAcc;
-  const to = h('input', { type: 'text', value: init.to || '', placeholder: 'destinataire@exemple.com', spellcheck: 'false' });
-  const cc = h('input', { type: 'text', value: init.cc || '', spellcheck: 'false' });
+  const to = h('input', { type: 'text', value: init.to || '', placeholder: 'destinataire@exemple.com', spellcheck: 'false', autocomplete: 'off' });
+  const cc = h('input', { type: 'text', value: init.cc || '', spellcheck: 'false', autocomplete: 'off' });
   const subject = h('input', { type: 'text', value: init.subject || '' });
   const body = h('textarea', { rows: '12' });
-  body.value = init.body || '';
+  // signature : insérée au-dessus du texte cité (réponse / transfert), changeable depuis la liste « Signature »
+  const sigSel = h('select', { 'aria-label': 'Signature' });
+  const sigsOf = () => (accountById(from.value) || {}).signatures || [];
+  let currentBlock = '';
+  const fillSigSelect = (preferred) => {
+    clear(sigSel);
+    sigSel.appendChild(h('option', { value: '' }, 'Aucune'));
+    sigsOf().forEach((sg) => sigSel.appendChild(h('option', { value: sg.id }, sg.name)));
+    sigSel.value = sigsOf().some((x) => x.id === preferred) ? preferred : '';
+  };
+  const applySig = (first) => {
+    const sig = sigsOf().find((x) => x.id === sigSel.value);
+    const next = sigBlock(sig);
+    if (first) { body.value = next + (init.body || ''); currentBlock = next; return; }
+    const v = body.value;
+    const at = currentBlock ? v.indexOf(currentBlock) : -1;
+    if (at >= 0) body.value = v.slice(0, at) + next + v.slice(at + currentBlock.length);
+    else if (next) { const pos = body.selectionStart || 0; body.value = v.slice(0, pos) + next + v.slice(pos); }
+    currentBlock = next;
+  };
+  fillSigSelect((accountById(from.value) || {}).defaultSignature);
+  applySig(true);
+  sigSel.addEventListener('change', () => applySig(false));
+  from.addEventListener('change', () => { fillSigSelect((accountById(from.value) || {}).defaultSignature); applySig(false); });
   let files = [];
   const attBox = h('div', { class: 'att-list' });
   const renderAtt = () => {
@@ -1344,6 +1575,7 @@ function openCompose(init = {}) {
     large: true,
     body: h('div', { class: 'compose-grid' },
       h('div', { class: 'row-line' }, h('label', null, 'De'), from),
+      h('div', { class: 'row-line' }, h('label', null, 'Signature'), sigSel),
       h('div', { class: 'row-line' }, h('label', null, 'À'), to),
       h('div', { class: 'row-line' }, h('label', null, 'Cc'), cc),
       h('div', { class: 'row-line' }, h('label', null, 'Objet'), subject),
@@ -1366,11 +1598,14 @@ function openCompose(init = {}) {
             }));
             d.close();
             toast('Message envoyé.');
+            call(api.contacts.list()).then((c) => { state.contacts = c; }).catch(() => {});
           } catch (err) { btn.disabled = false; d.error(err.message); }
         },
       },
     ],
   });
+  attachAutocomplete(to);
+  attachAutocomplete(cc);
   (init.to ? body : to).focus();
   if (init.to) body.setSelectionRange(0, 0);
 }
@@ -1404,7 +1639,13 @@ function renderRulesPanel() {
     h('div', { class: 'toolbar-row' },
       h('button', { class: 'primary', disabled: !state.accounts.length, on: { click: () => openRuleEditor() } }, ico('plus', 16), 'Nouvelle règle'),
       h('button', { class: 'ghost', disabled: !state.accounts.length, on: { click: openThunderbirdImport } }, ico('download', 16), 'Importer depuis Thunderbird'),
-      state.accounts.map((a) => h('button', { class: 'ghost', title: 'Range maintenant les 500 derniers messages de la boîte de réception', on: { click: () => applyRules(a.id, 'INBOX') } }, `Appliquer à ${a.name}`))));
+      h('button', { class: 'ghost', disabled: !state.accounts.length, title: 'Force le tri : applique les règles aux 1000 derniers messages de la boîte de réception de chaque compte', on: { click: async (e) => {
+        e.currentTarget.disabled = true;
+        try { reportSort(await call(api.rules.applyAll())); await Promise.all(state.accounts.map((a) => loadFolders(a.id))); }
+        catch (err) { toast(err.message, { error: true }); }
+        renderRulesPanel();
+      } } }, ico('rules', 16), 'Trier maintenant toutes les boîtes'),
+      state.accounts.length > 1 ? state.accounts.map((a) => h('button', { class: 'ghost', title: 'Range maintenant les 1000 derniers messages de la boîte de réception', on: { click: () => applyRules(a.id, 'INBOX') } }, `Appliquer à ${a.name}`)) : null));
 
   if (!state.rules.length) {
     inner.appendChild(h('div', { class: 'empty', style: 'padding:24px 0' },
@@ -1534,7 +1775,14 @@ async function renderSettingsPanel() {
     h('div', { class: 'seg' }, themeBtn('auto', 'Automatique'), themeBtn('light', 'Clair'), themeBtn('dark', 'Sombre')),
     h('h3', null, 'Lecture des messages'),
     h('div', { class: 'seg' }, LAYOUTS.map((l) => h('button', { class: layoutPref() === l.id ? 'on' : '', on: { click: async () => { await setLayout(l.id); renderSettingsPanel(); } } }, l.short))),
-    h('p', { class: 'lead', style: 'margin:8px 0 0' }, 'Ce choix est aussi disponible en haut de la liste des messages. Un double-clic sur un message l’ouvre en plein écran, quelle que soit la disposition.'),
+    h('p', { class: 'lead', style: 'margin:8px 0 0' }, 'Ce choix est aussi disponible en haut de la liste des messages. Un double-clic sur un message l’ouvre en plein écran, quelle que soit la disposition (en mode plein écran, un simple clic sélectionne seulement).'),
+    h('h3', null, 'Contenu distant (images des e-mails)'),
+    h('div', { class: 'seg' },
+      [['ask', 'Demander à chaque message'], ['always', 'Toujours afficher']].map(([v, label]) => h('button', {
+        class: (state.prefs.remoteContent === 'always' ? 'always' : 'ask') === v ? 'on' : '',
+        on: { click: async () => { state.prefs = await call(api.prefs.set({ remoteContent: v })); renderSettingsPanel(); } },
+      }, label))),
+    h('p', { class: 'lead', style: 'margin:8px 0 0' }, 'Les images distantes peuvent signaler à l’expéditeur que vous avez ouvert son message. Elles ne sont jamais chargées tant que vous ne l’avez pas autorisé ici ou dans le message.'),
     h('h3', null, 'Tri'),
     h('label', { class: 'check' },
       h('input', { type: 'checkbox', checked: state.prefs.autoRuleOnDrop !== false, on: { change: async (e) => {
@@ -1542,6 +1790,9 @@ async function renderSettingsPanel() {
         catch (err) { e.target.checked = !e.target.checked; toast(err.message, { error: true }); }
       } } }),
       h('span', null, 'Créer une règle de tri quand je glisse un message dans un dossier : les prochains messages de la même adresse y seront rangés automatiquement.')),
+    h('h3', null, 'Carnet d’adresses'),
+    h('p', { class: 'lead', style: 'margin:0 0 10px' }, 'MailHub retient les personnes à qui vous écrivez et vous les propose quand vous saisissez un destinataire.'),
+    contactsSection(),
     h('h3', null, 'Démarrage'),
     h('label', { class: 'check' },
       h('input', { type: 'checkbox', checked: !!state.prefs.openAtLogin, on: { change: async (e) => {
@@ -1553,10 +1804,98 @@ async function renderSettingsPanel() {
     !encryption ? h('div', { class: 'notice' }, 'Le chiffrement du système (Trousseau macOS ou Windows) n’est pas disponible : les mots de passe sont enregistrés avec un simple encodage. Utilisez des mots de passe d’application.') : null,
     state.accounts.map((a) => h('div', { class: 'acc-row', vars: { '--acc': a.color } },
       h('span', { class: 'swatch' }),
-      h('div', { class: 'info' }, h('b', null, a.name), h('small', null, `${a.email} · ${a.imap.host}:${a.imap.port}`)),
+      h('div', { class: 'info' }, h('b', null, a.name), h('small', null, `${a.email} · ${a.imap.host}:${a.imap.port}`),
+        h('small', null, (a.signatures || []).length ? `${a.signatures.length} ${plural(a.signatures.length, 'signature', 'signatures')}` : 'Aucune signature')),
+      h('button', { class: 'ghost', on: { click: () => openSignatures(a) } }, 'Signatures…'),
       h('button', { class: 'danger', on: { click: () => removeAccount(a) } }, 'Retirer'))),
     h('div', { class: 'toolbar-row', style: 'margin-top:16px' },
       h('button', { class: 'primary', on: { click: openAddAccount } }, ico('plus', 16), 'Ajouter un compte'))));
+}
+
+function contactsSection() {
+  const wrap = h('div');
+  const list = h('div', { class: 'contact-list' });
+  const filter = h('input', { type: 'search', placeholder: 'Filtrer le carnet', autocomplete: 'off', spellcheck: 'false' });
+  const count = h('span', { class: 'lead', style: 'margin:0' });
+  const draw = () => {
+    clear(list);
+    const q = filter.value.trim().toLowerCase();
+    const shown = state.contacts.filter((c) => !q || `${c.name} ${c.email}`.toLowerCase().includes(q));
+    count.textContent = `${state.contacts.length} ${plural(state.contacts.length, 'contact', 'contacts')}`;
+    list.hidden = !shown.length;
+    shown.slice(0, 200).forEach((c) => list.appendChild(h('div', { class: 'contact-row' },
+      h('div', { class: 'info' }, c.name || c.email, c.name ? h('small', null, c.email) : null),
+      h('button', { class: 'icon-btn', title: 'Retirer du carnet', 'aria-label': 'Retirer ' + c.email, on: { click: async () => {
+        try { state.contacts = await call(api.contacts.remove(c.email)); draw(); } catch (err) { toast(err.message, { error: true }); }
+      } } }, ico('close', 15)))));
+  };
+  const importBtn = h('button', { class: 'ghost', on: { click: async () => {
+    importBtn.disabled = true;
+    try {
+      const r = await call(api.contacts.importSent());
+      state.contacts = r.contacts;
+      toast(r.added ? `${r.added} ${plural(r.added, 'contact ajouté', 'contacts ajoutés')} depuis vos messages envoyés.` : 'Aucun nouveau contact trouvé dans vos messages envoyés.');
+      draw();
+    } catch (err) { toast(err.message, { error: true }); }
+    importBtn.disabled = false;
+  } } }, 'Importer depuis mes messages envoyés');
+  filter.addEventListener('input', draw);
+  wrap.append(h('div', { class: 'toolbar-row', style: 'margin-bottom:0' }, importBtn, count), filter, list);
+  draw();
+  return wrap;
+}
+
+function openSignatures(acc) {
+  let sigs = (acc.signatures || []).map((x) => ({ ...x }));
+  let def = acc.defaultSignature || '';
+  let sel = sigs[0] ? sigs[0].id : '';
+  const listBox = h('div', { class: 'sig-list' });
+  const form = h('div', { class: 'sig-form' });
+  const draw = () => {
+    clear(listBox);
+    sigs.forEach((sg) => listBox.appendChild(h('button', { class: sg.id === sel ? 'on' : '', on: { click: () => { sel = sg.id; draw(); } } },
+      h('span', null, sg.name || 'Sans nom'), sg.id === def ? h('span', { class: 'tag' }, 'par défaut') : null)));
+    listBox.appendChild(h('button', { on: { click: () => {
+      const sg = { id: 's_' + Date.now().toString(36) + Math.random().toString(36).slice(2, 5), name: 'Signature ' + (sigs.length + 1), text: '' };
+      sigs.push(sg); sel = sg.id; if (!def) def = sg.id; draw();
+    } } }, h('span', null, '+ Nouvelle signature')));
+    clear(form);
+    const cur = sigs.find((x) => x.id === sel);
+    if (!cur) { form.appendChild(h('p', { class: 'lead', style: 'margin:0' }, 'Aucune signature pour ce compte. Créez-en une, par exemple « Professionnelle » et « Personnelle ». Vous pourrez choisir laquelle utiliser à chaque nouveau message.')); return; }
+    const name = h('input', { type: 'text', value: cur.name, maxlength: '80' });
+    const text = h('textarea', { rows: '8', placeholder: 'Cordialement,\nPrénom Nom' });
+    text.value = cur.text;
+    name.addEventListener('input', () => { cur.name = name.value; const b = listBox.querySelector('button.on span'); if (b) b.textContent = name.value || 'Sans nom'; });
+    text.addEventListener('input', () => { cur.text = text.value; });
+    form.append(
+      h('div', { class: 'field' }, h('label', null, 'Nom (visible dans la liste)'), name),
+      h('div', { class: 'field' }, h('label', null, 'Texte de la signature'), text),
+      h('label', { class: 'check' }, h('input', { type: 'checkbox', checked: def === cur.id, on: { change: (e) => { def = e.target.checked ? cur.id : (def === cur.id ? '' : def); draw(); } } }),
+        h('span', null, 'Utiliser par défaut pour les nouveaux messages de ce compte')),
+      h('div', null, h('button', { class: 'danger', on: { click: () => {
+        sigs = sigs.filter((x) => x.id !== cur.id); if (def === cur.id) def = ''; sel = sigs[0] ? sigs[0].id : ''; draw();
+      } } }, 'Supprimer cette signature')));
+  };
+  const dlg = openDialog({
+    title: `Signatures · ${acc.email}`, large: true,
+    subtitle: 'Plusieurs signatures par adresse. Dans la rédaction d’un message, une liste « Signature » permet de choisir.',
+    body: h('div', { class: 'sig-editor' }, listBox, form),
+    buttons: [
+      { label: 'Annuler', onClick: (d) => d.close() },
+      { label: 'Enregistrer', kind: 'primary', onClick: async (d, btn) => {
+        btn.disabled = true;
+        try {
+          const updated = await call(api.accounts.update(acc.id, { signatures: sigs, defaultSignature: def }));
+          const i = state.accounts.findIndex((x) => x.id === acc.id);
+          if (i >= 0) state.accounts[i] = updated;
+          d.close();
+          renderSettingsPanel();
+          toast('Signatures enregistrées.');
+        } catch (err) { btn.disabled = false; d.error(err.message); }
+      } },
+    ],
+  });
+  draw();
 }
 
 async function removeAccount(a) {
@@ -1875,12 +2214,19 @@ document.addEventListener('keydown', (e) => {
   if (['input', 'textarea', 'select'].includes(tag) || $('#modal-root').firstChild || state.view !== 'mail') return;
   if (e.metaKey || e.ctrlKey || e.altKey) return;
   if (e.key === 'Escape') { if (state.reading) closeReader(); return; }
-  const idx = state.opened ? state.messages.findIndex((m) => keyOf(m) === keyOf(state.opened.msg)) : -1;
+  const selKeys = [...state.sel];
+  const idx = state.opened ? state.messages.findIndex((m) => keyOf(m) === keyOf(state.opened.msg))
+    : (selKeys.length === 1 ? state.messages.findIndex((m) => keyOf(m) === selKeys[0]) : -1);
+  if (e.key === 'Enter' && !state.reading && selKeys.length === 1) {
+    const m = state.messages[idx];
+    if (m) { e.preventDefault(); onRowDblClick(m); return; }
+  }
+  if (e.key === 's' && selKeys.length) { e.preventDefault(); const sel = selectedMessages(); const on = !sel.every((m) => m.flagged); sel.forEach((m) => { if (!!m.flagged !== on) toggleFlag(m); }); return; }
   const go = (i) => {
     const m = state.messages[i];
     if (!m) return;
     selectOnly(m);
-    openMessage(m);
+    if (layoutPref() === 'full' && !state.reading) renderList(); else openMessage(m);
     const row = $('#list-rows').children[i];
     if (row && row.scrollIntoView) row.scrollIntoView({ block: 'nearest' });
   };
@@ -1918,6 +2264,10 @@ window.addEventListener('unhandledrejection', (e) => {
   $('#nav-settings').append(ico('gear'), h('span', null, 'Réglages'));
   $('#btn-refresh').appendChild(ico('refresh', 17));
   $('#search-icon').appendChild(ico('search', 16));
+  $('#btn-sortnow').append(ico('rules', 15), 'Trier maintenant');
+  $('#btn-sortnow').addEventListener('click', sortNow);
+  $('#sort-by').addEventListener('change', (e) => setSort(e.target.value, e.target.value === 'date' ? 'desc' : 'asc'));
+  $('#sort-dir').addEventListener('click', () => setSort(sortBy(), sortDir() === 'asc' ? 'desc' : 'asc'));
   renderReader();
 
   try {
@@ -1926,6 +2276,7 @@ window.addEventListener('unhandledrejection', (e) => {
     applyLayout();
     state.accounts = await call(api.accounts.list());
     state.rules = await call(api.rules.list());
+    state.contacts = await call(api.contacts.list());
   } catch (err) {
     toast(err.message, { error: true });
   }

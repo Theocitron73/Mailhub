@@ -383,7 +383,7 @@ details.adv summary { cursor: pointer; font-weight: 600; margin-bottom: 10px; }
 .cond { display: grid; grid-template-columns: 1.2fr 1.1fr 1.6fr auto; gap: 8px; align-items: center; }
 
 .compose-grid { display: grid; gap: 10px; }
-.compose-grid .row-line { display: grid; grid-template-columns: 56px 1fr; align-items: center; gap: 8px; }
+.compose-grid .row-line { display: grid; grid-template-columns: 76px 1fr; align-items: center; gap: 8px; }
 .compose-grid .row-line label { color: var(--ink-2); }
 .compose-grid textarea { min-height: 240px; }
 .att-list { display: flex; flex-wrap: wrap; gap: 6px; }
@@ -423,3 +423,47 @@ details.adv summary { cursor: pointer; font-weight: 600; margin-bottom: 10px; }
 .chip { display: inline-flex; align-items: center; gap: 5px; height: 20px; padding: 0 7px; border-radius: 5px; background: var(--accent-soft); font-size: 12px; font-weight: 600; color: var(--ink); white-space: nowrap; }
 .chip.warn { background: var(--danger-soft); }
 .import-summary { color: var(--ink-2); }
+
+
+/* ---- tri de la liste, tri forcé ---- */
+.sort-row { display: flex; align-items: center; gap: 6px; padding: 6px 12px 6px 16px; border-bottom: 1px solid var(--line); font-size: 12.5px; color: var(--ink-2); }
+.sort-row select { height: 28px; padding: 0 6px; font-size: 12.5px; width: auto; }
+.sort-row .icon-btn { width: 28px; height: 28px; }
+.sort-row .sort-note { flex: 1; min-width: 0; overflow: hidden; text-overflow: ellipsis; white-space: nowrap; color: var(--ink-3); }
+.sort-row #btn-sortnow { height: 28px; padding: 0 8px; font-size: 12.5px; display: inline-flex; align-items: center; gap: 6px; margin-left: auto; white-space: nowrap; }
+
+/* ---- couleur des dossiers ---- */
+.folder.colored .ico { color: var(--fc); }
+.color-grid { display: flex; flex-wrap: wrap; gap: 10px; }
+.color-dot { width: 34px; height: 34px; border-radius: 50%; border: 2px solid transparent; background: var(--c); padding: 0; cursor: pointer; }
+.color-dot:hover { transform: scale(1.08); }
+.color-dot.on { border-color: var(--ink); box-shadow: 0 0 0 2px var(--surface) inset; }
+.color-dot.none { background: var(--panel); border: 2px dashed var(--line); color: var(--ink-2); font-size: 11px; }
+.color-dot.none.on { border-style: solid; border-color: var(--ink); }
+
+/* ---- favoris dans le lecteur ---- */
+.icon-btn.star-on { color: var(--star); --star-fill: currentColor; }
+
+/* ---- rédaction : autocomplétion et signature ---- */
+.compose-grid .row-line { position: relative; }
+.suggest { position: absolute; left: 84px; right: 0; top: 100%; z-index: 30; margin-top: 2px; background: var(--surface); border: 1px solid var(--line); border-radius: 8px; box-shadow: var(--shadow); max-height: 240px; overflow-y: auto; padding: 4px; }
+.suggest button { display: grid; width: 100%; text-align: left; gap: 0; height: auto; padding: 6px 10px; border: 0; background: transparent; border-radius: 6px; }
+.suggest button.on, .suggest button:hover { background: var(--accent-soft); }
+.suggest .s-name { font-weight: 600; }
+.suggest .s-mail { color: var(--ink-2); font-size: 12.5px; }
+.compose-grid .row-line.two { grid-template-columns: 56px 1fr 90px 1fr; }
+.compose-grid .row-line.two label.mid { text-align: right; }
+
+/* ---- signatures et carnet ---- */
+.sig-editor { display: grid; grid-template-columns: 190px 1fr; gap: 14px; min-height: 280px; }
+.sig-list { border: 1px solid var(--line); border-radius: 8px; overflow-y: auto; max-height: 320px; background: var(--surface); }
+.sig-list button { display: flex; align-items: center; justify-content: space-between; gap: 6px; width: 100%; height: 34px; padding: 0 10px; border: 0; background: transparent; text-align: left; }
+.sig-list button.on { background: var(--accent-soft); font-weight: 600; }
+.sig-list .tag { font-size: 11px; color: var(--accent); }
+.sig-form { display: grid; gap: 10px; align-content: start; }
+.sig-form textarea { min-height: 150px; font-family: inherit; }
+.contact-list { border: 1px solid var(--line); border-radius: 8px; max-height: 260px; overflow-y: auto; margin-top: 10px; }
+.contact-row { display: flex; align-items: center; gap: 10px; padding: 7px 12px; border-bottom: 1px solid var(--line); }
+.contact-row:last-child { border-bottom: 0; }
+.contact-row .info { flex: 1; min-width: 0; overflow: hidden; text-overflow: ellipsis; white-space: nowrap; }
+.contact-row small { color: var(--ink-2); margin-left: 8px; }

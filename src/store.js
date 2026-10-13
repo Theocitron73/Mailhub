@@ -14,7 +14,7 @@ class Store {
     this.dir = dir;
     this.file = path.join(dir, 'mailhub-data.json');
     this.safe = safeStorage;
-    this.data = { accounts: [], rules: [], prefs: { theme: 'auto' }, sync: {} };
+    this.data = { accounts: [], rules: [], prefs: { theme: 'auto' }, sync: {}, contacts: {} };
     this._load();
   }
 
@@ -99,6 +99,27 @@ class Store {
     return this.listAccounts().find((a) => a.id === id);
   }
 
+  /** Met à jour les champs modifiables d'un compte (nom, signatures). */
+  updateAccount(id, patch) {
+    const acc = this.data.accounts.find((a) => a.id === id);
+    if (!acc) throw new Error('Compte introuvable');
+    if (typeof patch.name === 'string' && patch.name.trim()) acc.name = patch.name.trim();
+    if (Array.isArray(patch.signatures)) {
+      acc.signatures = patch.signatures.slice(0, 20).map((sg) => ({
+        id: String(sg.id || newId()),
+        name: String(sg.name || 'Signature').slice(0, 80),
+        text: String(sg.text || '').slice(0, 5000),
+      }));
+      const ids = acc.signatures.map((x) => x.id);
+      acc.defaultSignature = ids.includes(patch.defaultSignature) ? patch.defaultSignature : '';
+    } else if ('defaultSignature' in patch) {
+      const ids = (acc.signatures || []).map((x) => x.id);
+      acc.defaultSignature = ids.includes(patch.defaultSignature) ? patch.defaultSignature : '';
+    }
+    this._save();
+    return this.listAccounts().find((a) => a.id === id);
+  }
+
   removeAccount(id) {
     this.data.accounts = this.data.accounts.filter((a) => a.id !== id);
     this.data.rules = this.data.rules.filter((r) => r.accountId !== id);
@@ -164,6 +185,38 @@ class Store {
     rules.splice(to, 0, rule);
     this._save();
     return rules;
+  }
+
+  // ---- Carnet d'adresses : les personnes à qui on a écrit ----
+  listContacts() {
+    return Object.values(this.data.contacts || {}).sort((a, b) => (b.count - a.count) || (b.last || '').localeCompare(a.last || ''));
+  }
+
+  /** list : [{ name, address }]. Incrémente le compteur d'envois de chaque adresse. */
+  recordContacts(list, { when = new Date().toISOString(), bump = 1 } = {}) {
+    if (!this.data.contacts) this.data.contacts = {};
+    let added = 0;
+    for (const c of list) {
+      const email = String((c && c.address) || '').trim().toLowerCase();
+      if (!/^[^\s@<>,;"]+@[^\s@<>,;"]+\.[^\s@<>,;"]+$/.test(email)) continue;
+      const name = String((c && c.name) || '').trim();
+      let rec = this.data.contacts[email];
+      if (!rec) { rec = this.data.contacts[email] = { email, name: '', count: 0, last: '' }; added++; }
+      if (name && name.toLowerCase() !== email) rec.name = name;
+      rec.count += bump;
+      if (when > rec.last) rec.last = when;
+    }
+    const keys = Object.keys(this.data.contacts);
+    if (keys.length > 5000) { // on garde les plus utilisés
+      keys.sort((a, b) => this.data.contacts[b].count - this.data.contacts[a].count).slice(5000).forEach((k) => delete this.data.contacts[k]);
+    }
+    this._save();
+    return added;
+  }
+
+  removeContact(email) {
+    delete (this.data.contacts || {})[String(email).toLowerCase()];
+    this._save();
   }
 
   // ---- Préférences ----

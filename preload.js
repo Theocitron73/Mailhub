@@ -12,6 +12,7 @@ contextBridge.exposeInMainWorld('mailhub', {
     list: () => invoke('accounts:list'),
     test: (cfg) => invoke('accounts:test', cfg),
     add: (cfg) => invoke('accounts:add', cfg),
+    update: (id, patch) => invoke('accounts:update', id, patch),
     remove: (id) => invoke('accounts:remove', id),
     encryptionAvailable: () => invoke('accounts:encryption'),
   },
@@ -35,6 +36,7 @@ contextBridge.exposeInMainWorld('mailhub', {
     remove: (accountId, folder, uids) => invoke('messages:remove', accountId, folder, uids),
     saveAttachment: (accountId, folder, uid, index) => invoke('messages:saveAttachment', accountId, folder, uid, index),
     send: (accountId, mail) => invoke('messages:send', accountId, mail),
+    flagged: () => invoke('messages:flagged'),
     pickAttachments: () => invoke('messages:pickAttachments'),
   },
 
@@ -51,6 +53,14 @@ contextBridge.exposeInMainWorld('mailhub', {
     // glisser-déposer : une règle par expéditeur, avec de quoi annuler
     autoSender: (payload) => invoke('rules:autoSender', payload),
     applyToFolder: (accountId, folder) => invoke('rules:applyToFolder', accountId, folder),
+    applyAll: (accountId) => invoke('rules:applyAll', accountId),
+  },
+
+  // carnet d'adresses
+  contacts: {
+    list: () => invoke('contacts:list'),
+    remove: (email) => invoke('contacts:remove', email),
+    importSent: () => invoke('contacts:importSent'),
   },
 
   // import des filtres Thunderbird

@@ -38,6 +38,17 @@
             <input id="search" type="search" placeholder="Rechercher expéditeur ou objet" autocomplete="off" spellcheck="false">
           </div>
         </header>
+        <div class="sort-row">
+          <label for="sort-by">Trier par</label>
+          <select id="sort-by" aria-label="Critère de tri de la liste">
+            <option value="date">Date</option>
+            <option value="from">Correspondant</option>
+            <option value="subject">Objet</option>
+          </select>
+          <button id="sort-dir" class="icon-btn" aria-label="Inverser l’ordre"></button>
+          <span id="sort-note" class="sort-note"></span>
+          <button id="btn-sortnow" class="subtle" title="Applique vos règles de tri aux messages déjà présents dans ce dossier"></button>
+        </div>
         <div id="selection-bar" class="selection-bar" hidden></div>
         <div id="list-rows" class="rows" tabindex="0" role="listbox" aria-label="Liste des messages"></div>
       </section>

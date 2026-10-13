@@ -5,6 +5,7 @@ const { ImapFlow } = require('imapflow');
 const { simpleParser } = require('mailparser');
 const nodemailer = require('nodemailer');
 const MailComposer = require('nodemailer/lib/mail-composer');
+const addressparser = require('nodemailer/lib/addressparser');
 const { findRule, senderRule, ruleMatches, domainOf } = require('./rules');
 
 // ---------------------------------------------------------------- utilitaires
@@ -413,12 +414,12 @@ class ImapManager extends EventEmitter {
   }
 
   /** Applique les règles aux N derniers messages d'un dossier (action manuelle). */
-  async applyRulesToFolder(accountId, folder, { limit = 500 } = {}) {
+  async applyRulesToFolder(accountId, folder, { limit = 1000 } = {}) {
     const rules = this._rulesFor(accountId);
-    if (!rules.length) return { moved: 0 };
+    if (!rules.length) return { moved: 0, scanned: 0, failed: [], noRules: true };
     return this.withMailbox(accountId, folder, async (client) => {
       const exists = client.mailbox.exists;
-      if (!exists) return { moved: 0 };
+      if (!exists) return { moved: 0, scanned: 0, failed: [] };
       const start = Math.max(1, exists - limit + 1);
       const list = [];
       for await (const msg of client.fetch(`${start}:*`, { uid: true, envelope: true, flags: true })) {
@@ -433,15 +434,16 @@ class ImapManager extends EventEmitter {
         }
       }
       let moved = 0;
+      const failed = [];
       for (const [dest, uids] of byFolder) {
         try {
           await this._moveWithCreate(client, uids, dest);
           moved += uids.length;
         } catch (err) {
-          this.emit('error', { accountId, message: `Déplacement vers « ${dest} » impossible : ${friendlyError(err)}` });
+          failed.push({ folder: dest, count: uids.length, message: friendlyError(err) });
         }
       }
-      return { moved };
+      return { moved, scanned: list.length, failed };
     });
   }
 
@@ -577,6 +579,62 @@ class ImapManager extends EventEmitter {
     const c = w.client;
     w.client = null;
     if (c) { try { c.close(); } catch (_) { /* ignore */ } }
+  }
+
+  // ---- favoris (messages suivis) --------------------------------------------------
+
+  /** Messages suivis (étoile) de tous les dossiers utiles d'un compte. */
+  async listFlagged(accountId, { perFolder = 100 } = {}) {
+    const { folders } = await this.listFolders(accountId);
+    const skip = new Set(['\\Trash', '\\Junk', '\\Drafts', '\\All', '\\Flagged']);
+    const out = [];
+    for (const f of folders) {
+      if (!f.selectable || skip.has(f.specialUse)) continue;
+      try {
+        const msgs = await this.withMailbox(accountId, f.path, async (client) => {
+          const found = await client.search({ flagged: true }, { uid: true });
+          if (!found || !found.length) return [];
+          const uids = found.slice(-perFolder);
+          const list = [];
+          for await (const msg of client.fetch(uids.join(','), {
+            uid: true, flags: true, envelope: true, internalDate: true, size: true, bodyStructure: true,
+          }, { uid: true })) list.push({ ...summarize(msg), folder: f.path });
+          return list;
+        }, { readOnly: true });
+        out.push(...msgs);
+      } catch (_) { /* dossier illisible : on passe au suivant */ }
+    }
+    return out;
+  }
+
+  // ---- carnet d'adresses --------------------------------------------------------
+
+  static parseRecipients(...fields) {
+    const out = [];
+    const walk = (list) => (list || []).forEach((a) => {
+      if (a.group) walk(a.group); else if (a.address) out.push({ name: a.name || '', address: a.address });
+    });
+    fields.filter(Boolean).forEach((f) => walk(addressparser(f)));
+    return out;
+  }
+
+  /** Lit les destinataires des derniers messages du dossier Envoyés (pour amorcer le carnet). */
+  async sentRecipients(accountId, { limit = 400 } = {}) {
+    const client = await this._ops(accountId);
+    const sent = await this._findSpecial(client, '\\Sent', /^(sent|envoy|éléments envoyés|sent items|sent messages)/i);
+    if (!sent) return [];
+    return this.withMailbox(accountId, sent, async (c) => {
+      const exists = c.mailbox.exists;
+      if (!exists) return [];
+      const start = Math.max(1, exists - limit + 1);
+      const out = [];
+      for await (const msg of c.fetch(`${start}:*`, { envelope: true, internalDate: true })) {
+        const env = msg.envelope || {};
+        const when = isoDate(env.date, msg.internalDate);
+        [...(env.to || []), ...(env.cc || [])].forEach((a) => { if (a.address) out.push({ name: a.name || '', address: a.address, when }); });
+      }
+      return out;
+    }, { readOnly: true });
   }
 
   // ---- envoi (SMTP) ---------------------------------------------------------------------
