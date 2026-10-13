@@ -542,3 +542,34 @@ body.mac #tabbar { padding-top: 8px; }
 
 .color-dot.none { width: auto; min-width: 34px; padding: 0 12px; border-radius: 17px; font-size: 12px; }
 .att-img { image-rendering: auto; min-width: 24px; min-height: 24px; }
+
+/* ---- dossiers : texte de la couleur de l'icône, pliage ---- */
+.folder.colored .name { color: var(--fc); }
+.fold { width: 16px; height: 16px; flex: none; display: inline-flex; align-items: center; justify-content: center; margin-left: -4px; color: var(--ink-3); border-radius: 4px; cursor: pointer; }
+.fold:hover { background: var(--line); color: var(--ink); }
+.fold svg { width: 12px; height: 12px; transition: transform .12s; transform: rotate(90deg); }
+.fold.closed svg { transform: rotate(0deg); }
+.fold.none { cursor: default; pointer-events: none; }
+.count.sub { background: var(--accent-soft); border-radius: 9px; padding: 0 6px; color: var(--ink); font-weight: 650; }
+.color-custom { display: inline-flex; align-items: center; gap: 6px; height: 34px; padding: 0 12px; border-radius: 17px; border: 2px dashed var(--line); font-size: 12px; color: var(--ink-2); cursor: pointer; }
+.color-custom input { width: 20px; height: 20px; padding: 0; border: 0; background: none; }
+
+/* ---- thème Graphite (gris / noir) ---- */
+:root[data-theme="graphite"] {
+  --bg: #121212;
+  --panel: #181818;
+  --surface: #1e1e1e;
+  --ink: #e8e8e8;
+  --ink-2: #a0a0a0;
+  --ink-3: #707070;
+  --line: #2c2c2c;
+  --accent: #d4d4d4;
+  --accent-ink: #141414;
+  --accent-soft: #2a2a2a;
+  --danger: #ff8d80;
+  --danger-soft: #3a2422;
+  --star: #e0b040;
+  --focus: #bdbdbd;
+  --shadow: 0 12px 40px rgba(0, 0, 0, 0.65);
+  color-scheme: dark;
+}

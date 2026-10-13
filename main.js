@@ -185,7 +185,30 @@ function registerIpc() {
     manager.startWatching(account.id);
     return account;
   });
-  handle('accounts:update', (id, patch) => store.updateAccount(id, patch || {}));
+  handle('accounts:update', async (id, patch = {}) => {
+    const cur = store.getAccount(id);
+    if (!cur) throw new Error('Compte introuvable');
+    const touchesServer = !!(patch.imap || patch.email || patch.password);
+    if (touchesServer) {
+      // on vérifie la connexion avec les nouveaux paramètres AVANT d'enregistrer quoi que ce soit
+      const email = typeof patch.email === 'string' ? patch.email.trim() : cur.email;
+      const imap = patch.imap
+        ? { host: String(patch.imap.host || '').trim(), port: Number(patch.imap.port) || 993, secure: patch.imap.secure !== false, user: String(patch.imap.user || '').trim() || email }
+        : cur.imap;
+      if (!imap.host) throw new Error('Indiquez le serveur IMAP.');
+      const test = await ImapManager.testConnection({ email, password: patch.password || cur.password, imap });
+      if (!test.ok) throw new Error(test.error);
+    }
+    const before = JSON.stringify([cur.imap, cur.email]);
+    const updated = store.updateAccount(id, patch);
+    const after = JSON.stringify([store.getAccount(id).imap, store.getAccount(id).email]);
+    if (touchesServer) {
+      await manager.disconnect(id);
+      if (before !== after) store.setSync(id, null); // autre serveur : les numéros de messages ne sont plus comparables
+      manager.startWatching(id);
+    }
+    return updated;
+  });
   handle('accounts:remove', async (id) => {
     await manager.disconnect(id);
     store.removeAccount(id);
@@ -442,7 +465,7 @@ function registerIpc() {
   handle('prefs:get', () => store.getPrefs());
   handle('prefs:set', (patch) => {
     const prefs = store.setPrefs(patch);
-    if (patch.theme) nativeTheme.themeSource = patch.theme === 'auto' ? 'system' : patch.theme;
+    if (patch.theme) nativeTheme.themeSource = patch.theme === 'auto' ? 'system' : (patch.theme === 'graphite' ? 'dark' : patch.theme);
     if ('openAtLogin' in patch && app.isPackaged) {
       app.setLoginItemSettings({ openAtLogin: !!patch.openAtLogin, args: ['--hidden'] });
     }
@@ -490,7 +513,7 @@ app.whenReady().then(() => {
   manager = new ImapManager(store);
 
   const prefs = store.getPrefs();
-  nativeTheme.themeSource = !prefs.theme || prefs.theme === 'auto' ? 'system' : prefs.theme;
+  nativeTheme.themeSource = !prefs.theme || prefs.theme === 'auto' ? 'system' : (prefs.theme === 'graphite' ? 'dark' : prefs.theme);
 
   registerIpc();
   wireManagerEvents();

@@ -21,6 +21,12 @@ automatiquement les nouveaux messages dans vos dossiers.
 - **Onglets, comme Thunderbird** : un double-clic (ou `Entrée`, ou clic molette) sur un message l'ouvre dans un onglet ; un clic sur une pièce jointe aussi (aperçu des images, PDF et fichiers texte ; les autres types proposent « Enregistrer » ou « Ouvrir avec l'application », sauf les fichiers exécutables). Fermeture par la croix, clic molette ou `Ctrl/Cmd+W` ; `Ctrl+Tab` change d'onglet. Un message supprimé ou rangé ailleurs ferme ses onglets.
 - **Export / import des règles** (Règles de tri) : « Exporter mes règles » écrit un fichier `.json` ; sur un autre ordinateur, « Importer un fichier de règles » les recharge (association des adresses de compte, doublons repérés et décochés, dossiers manquants créés au premier message rangé).
 - **Colonne de gauche redimensionnable** : glissez son bord (double-clic pour rétablir, flèches du clavier aussi). Les dossiers par défaut (réception, envoyés, corbeille…) sont séparés de « Mes dossiers ».
+- **Plier / déplier les dossiers** : un chevron apparaît devant chaque dossier contenant des sous-dossiers (état mémorisé). Replié, le dossier affiche le nombre de non-lus de ses sous-dossiers.
+- **Texte des dossiers coloré** : le nom d'un dossier prend la couleur de son icône.
+- **Couleur des comptes** modifiable (palette ou couleur personnalisée), appliquée à la barre latérale, aux listes et aux règles.
+- **Modifier un compte** : Réglages → « Modifier… » (ou clic droit sur le compte) : nom, couleur, adresse, mot de passe, serveurs IMAP/SMTP. Les paramètres de connexion sont **testés auprès du serveur avant d'être enregistrés** ; en cas d'échec, rien n'est modifié. Mot de passe laissé vide = conservé.
+- **Thème Graphite** (gris/noir neutre) en plus d'Automatique, Clair et Sombre.
+- **Anciens messages chargés automatiquement** : il suffit de faire défiler la liste, le lot suivant arrive tout seul (plus de bouton).
 - **Signatures multiples** par compte (Réglages → Signatures…), avec une signature par défaut et des **images ou GIF** (logo…, 1,5 Mo maximum chacune ; le message part alors en HTML) ; une liste « Signature » dans la rédaction permet d'en changer.
 - Les réponses reprennent le message d'origine **sans « > »**.
 - **Règles de tri** modifiables, avec ordre de priorité (la première règle qui correspond s'applique ; boutons « Appliquer plus tôt / plus tard ») : expéditeur, destinataire, objet ou domaine, avec « toutes les conditions » ou « au moins une ».

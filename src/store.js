@@ -105,6 +105,23 @@ class Store {
     const acc = this.data.accounts.find((a) => a.id === id);
     if (!acc) throw new Error('Compte introuvable');
     if (typeof patch.name === 'string' && patch.name.trim()) acc.name = patch.name.trim();
+    if (typeof patch.color === 'string' && /^#[0-9a-fA-F]{6}$/.test(patch.color)) acc.color = patch.color.toLowerCase();
+    if (typeof patch.email === 'string') {
+      const email = patch.email.trim();
+      if (!/^[^\s@]+@[^\s@]+$/.test(email)) throw new Error('Adresse e-mail invalide.');
+      acc.email = email;
+    }
+    if (patch.imap) {
+      const host = String(patch.imap.host || '').trim();
+      if (!host) throw new Error('Indiquez le serveur IMAP.');
+      acc.imap = { host, port: Number(patch.imap.port) || 993, secure: patch.imap.secure !== false, user: String(patch.imap.user || '').trim() || acc.email };
+    }
+    if ('smtp' in patch) {
+      acc.smtp = patch.smtp && String(patch.smtp.host || '').trim()
+        ? { host: String(patch.smtp.host).trim(), port: Number(patch.smtp.port) || 465, secure: patch.smtp.secure !== false, user: String(patch.smtp.user || '').trim() || acc.email }
+        : null;
+    }
+    if (typeof patch.password === 'string' && patch.password) acc.secret = this._encrypt(patch.password);
     if (Array.isArray(patch.signatures)) {
       acc.signatures = patch.signatures.slice(0, 20).map((sg) => ({
         id: String(sg.id || newId()),

@@ -87,6 +87,7 @@ const state = {
   messages: [],
   total: 0,
   loading: false,
+  loadingMore: false,
   error: '',
   query: '',
   sel: new Set(),
@@ -103,6 +104,7 @@ const state = {
 };
 
 let loadToken = 0;
+let unifiedMore = false;
 const keyOf = (m) => `${m.accountId}|${m.folder}|${m.uid}`;
 const accountById = (id) => state.accounts.find((a) => a.id === id);
 const accColor = (id) => (accountById(id) || {}).color || 'var(--line)';
@@ -132,6 +134,30 @@ async function setFolderColor(accountId, path, color) {
   if (color) map[folderColorKey(accountId, path)] = color; else delete map[folderColorKey(accountId, path)];
   state.prefs = await call(api.prefs.set({ folderColors: map }));
   renderSidebar();
+}
+
+// Dossiers repliés (mémorisés dans les préférences)
+function collapsedPaths(accountId) {
+  const info = state.folders[accountId];
+  const delimOf = (path) => { const f = info && info.folders.find((x) => x.path === path); return f ? f.delimiter : '/'; };
+  return (state.prefs.collapsedFolders || []).map((k) => {
+    const [aid, ...rest] = k.split('|');
+    return aid === accountId ? { path: rest.join('|'), delim: delimOf(rest.join('|')) } : null;
+  }).filter(Boolean);
+}
+async function toggleFolderFold(accountId, path) {
+  const key = folderColorKey(accountId, path);
+  const set = new Set(state.prefs.collapsedFolders || []);
+  if (set.has(key)) set.delete(key); else set.add(key);
+  state.prefs = { ...state.prefs, collapsedFolders: [...set] }; // affichage immédiat
+  renderSidebar();
+  try { state.prefs = await call(api.prefs.set({ collapsedFolders: [...set] })); } catch (err) { toast(err.message, { error: true }); }
+}
+// non lus cachés dans les sous-dossiers d'un dossier replié
+function subUnseen(accountId, f) {
+  const info = state.folders[accountId];
+  if (!info) return 0;
+  return info.folders.filter((x) => x.path.startsWith(f.path + f.delimiter)).reduce((n, x) => n + (x.unseen || 0), 0);
 }
 
 function folderLabel(accountId, path) {
@@ -328,7 +354,10 @@ function renderSidebar() {
     const open = state.open[acc.id] !== false;
     const status = state.status[acc.id] || '';
     const section = h('div', { class: 'account' + (open ? ' open' : ''), vars: { '--acc': acc.color } });
-    section.appendChild(h('div', { class: 'account-head' },
+    section.appendChild(h('div', { class: 'account-head', on: { contextmenu: (e) => { e.preventDefault(); showMenu(e.clientX, e.clientY, [
+      { label: 'Modifier le compte…', icon: 'gear', onClick: () => openAddAccount(acc) },
+      { label: 'Nouveau dossier', icon: 'plus', onClick: () => openNewFolderDialog(acc.id) },
+    ]); } } },
       h('button', { class: 'toggle', title: open ? 'Replier' : 'Déplier', 'aria-label': open ? 'Replier' : 'Déplier', on: { click: () => { state.open[acc.id] = !open; renderSidebar(); } } }, ico('chevron', 14)),
       h('span', { class: 'swatch' }),
       h('span', { class: 'acc-name', title: acc.email }, acc.name),
@@ -344,7 +373,13 @@ function renderSidebar() {
       list.appendChild(h('div', { class: 'loading', style: 'padding:6px 12px' }, 'Chargement…'));
     } else {
       let sawCustom = false;
-      layoutFolders(acc.id).forEach(({ folder: f, depth, special }) => {
+      const all = layoutFolders(acc.id);
+      const collapsed = collapsedPaths(acc.id);
+      all.forEach(({ folder: f, depth, special }, idx) => {
+        if (!special && collapsed.some((c) => f.path.startsWith(c.path + c.delim))) return; // caché par un dossier replié
+        const nxt = all[idx + 1];
+        const hasKids = !special && !!nxt && !nxt.special && nxt.folder.path.startsWith(f.path + f.delimiter);
+        const isCollapsed = hasKids && collapsed.some((c) => c.path === f.path);
         if (!special && !sawCustom) {
           sawCustom = true;
           list.appendChild(h('div', { class: 'folder-group' }, h('span', null, 'Mes dossiers')));
@@ -361,7 +396,11 @@ function renderSidebar() {
             click: () => f.selectable && selectFolder(acc.id, f.path),
             contextmenu: (e) => { e.preventDefault(); openFolderMenu(e, acc, f, special); },
           },
-        }, ico(special ? SPECIAL_ICON[f.specialUse] : 'folder'), h('span', { class: 'name' }, label), f.unseen ? h('span', { class: 'count' }, f.unseen) : null);
+        }, hasKids
+          ? h('span', { class: 'fold' + (isCollapsed ? ' closed' : ''), role: 'button', title: isCollapsed ? 'Déplier' : 'Replier', 'aria-label': (isCollapsed ? 'Déplier ' : 'Replier ') + label, 'aria-expanded': String(!isCollapsed),
+            on: { click: (e) => { e.stopPropagation(); e.preventDefault(); toggleFolderFold(acc.id, f.path); } } }, ico('chevron', 12))
+          : (special ? null : h('span', { class: 'fold none' })),
+        ico(special ? SPECIAL_ICON[f.specialUse] : 'folder'), h('span', { class: 'name' }, label), isCollapsed && subUnseen(acc.id, f) ? h('span', { class: 'count sub', title: 'Messages non lus dans les sous-dossiers' }, subUnseen(acc.id, f)) : null, f.unseen ? h('span', { class: 'count' }, f.unseen) : null);
 
         if (f.selectable) {
           row.addEventListener('dragover', (e) => { if (e.dataTransfer.types.includes('application/x-mailhub')) { e.preventDefault(); row.classList.add('drop-target'); } });
@@ -653,6 +692,11 @@ const LAYOUTS = [
 ];
 const layoutPref = () => (LAYOUTS.some((l) => l.id === state.prefs.layout) ? state.prefs.layout : 'right');
 
+// « Graphite » : thème gris / noir neutre (le thème sombre bleuté reste disponible)
+function applyTheme() {
+  document.documentElement.dataset.theme = state.prefs.theme === 'graphite' ? 'graphite' : '';
+}
+
 function applySizes() {
   const main = $('#main');
   if (state.prefs.listWidth) main.style.setProperty('--list-w', state.prefs.listWidth + 'px');
@@ -843,10 +887,12 @@ async function loadMessages({ append = false, silent = false } = {}) {
         }));
         messages = parts.flat();
       } else {
-        const data = await call(api.messages.unified(60));
+        const want = append ? state.messages.length + 60 : 60;
+        const data = await call(api.messages.unified(want));
         messages = data.map((m) => ({ ...m, folder: 'INBOX' }));
+        unifiedMore = data.length >= want; // il en reste probablement
       }
-      total = messages.length;
+      total = messages.length + (unifiedMore && !state.query ? 1 : 0);
     } else if (state.query) {
       const r = await call(api.messages.search(accountId, folder, state.query));
       messages = r.messages.map((m) => ({ ...m, accountId, folder }));
@@ -869,8 +915,21 @@ async function loadMessages({ append = false, silent = false } = {}) {
     if (token !== loadToken) return;
     state.error = err.message;
   } finally {
-    if (token === loadToken) { state.loading = false; renderList(); }
+    if (token === loadToken) { state.loading = false; state.loadingMore = false; renderList(); }
+    else if (append) state.loadingMore = false;
   }
+}
+
+// Défilement infini : les messages plus anciens se chargent seuls en approchant du bas de la liste
+const canLoadMore = () => !state.query && !['favorites'].includes(state.current.accountId) && state.messages.length > 0 && state.messages.length < state.total;
+function loadMoreIfNeeded() {
+  if (state.loading || state.loadingMore || state.error || !canLoadMore() || state.view !== 'mail') return;
+  const rows = $('#list-rows');
+  if (rows.clientHeight === 0) return; // liste masquée (onglet ouvert, plein écran…)
+  if (rows.scrollHeight - rows.scrollTop - rows.clientHeight > 400) return;
+  state.loadingMore = true;
+  renderList();
+  loadMessages({ append: true, silent: true });
 }
 
 // ---- tri de la liste (date, correspondant, objet) ----
@@ -976,11 +1035,11 @@ function renderList() {
     rows.appendChild(row);
   });
 
-  if (!state.query && !['unified', 'favorites'].includes(state.current.accountId) && state.messages.length < state.total) {
-    rows.appendChild(h('div', { class: 'more-row' },
-      h('button', { class: 'ghost', on: { click: () => loadMessages({ append: true }) } }, `Charger plus (${state.total - state.messages.length} restants)`)));
+  if (canLoadMore()) {
+    rows.appendChild(h('div', { class: 'more-row', role: 'status' }, state.loadingMore ? 'Chargement des messages plus anciens…' : 'Faites défiler pour charger les messages plus anciens'));
   }
   rows.scrollTop = top;
+  requestAnimationFrame(loadMoreIfNeeded); // la liste ne remplit pas l'écran : on continue
 }
 
 function renderSelectionBar() {
@@ -2053,6 +2112,7 @@ async function renderSettingsPanel() {
 
   const themeBtn = (value, label) => h('button', { class: state.prefs.theme === value ? 'on' : '', on: { click: async () => {
     state.prefs = await call(api.prefs.set({ theme: value }));
+    applyTheme();
     renderSettingsPanel();
   } } }, label);
 
@@ -2060,7 +2120,7 @@ async function renderSettingsPanel() {
     h('h1', null, 'Réglages'),
     h('p', { class: 'lead' }, 'Apparence et comptes connectés.'),
     h('h3', null, 'Apparence'),
-    h('div', { class: 'seg' }, themeBtn('auto', 'Automatique'), themeBtn('light', 'Clair'), themeBtn('dark', 'Sombre')),
+    h('div', { class: 'seg' }, themeBtn('auto', 'Automatique'), themeBtn('light', 'Clair'), themeBtn('dark', 'Sombre'), themeBtn('graphite', 'Graphite')),
     h('h3', null, 'Lecture des messages'),
     h('div', { class: 'seg' }, LAYOUTS.map((l) => h('button', { class: layoutPref() === l.id ? 'on' : '', on: { click: async () => { await setLayout(l.id); renderSettingsPanel(); } } }, l.short))),
     h('p', { class: 'lead', style: 'margin:8px 0 0' }, 'Ce choix est aussi disponible en haut de la liste des messages. Un double-clic sur un message l’ouvre en plein écran, quelle que soit la disposition (en mode plein écran, un simple clic sélectionne seulement).'),
@@ -2094,10 +2154,11 @@ async function renderSettingsPanel() {
       h('span', { class: 'swatch' }),
       h('div', { class: 'info' }, h('b', null, a.name), h('small', null, `${a.email} · ${a.imap.host}:${a.imap.port}`),
         h('small', null, (a.signatures || []).length ? `${a.signatures.length} ${plural(a.signatures.length, 'signature', 'signatures')}` : 'Aucune signature')),
+      h('button', { class: 'ghost', on: { click: () => openAddAccount(a) } }, 'Modifier…'),
       h('button', { class: 'ghost', on: { click: () => openSignatures(a) } }, 'Signatures…'),
       h('button', { class: 'danger', on: { click: () => removeAccount(a) } }, 'Retirer'))),
     h('div', { class: 'toolbar-row', style: 'margin-top:16px' },
-      h('button', { class: 'primary', on: { click: openAddAccount } }, ico('plus', 16), 'Ajouter un compte'))));
+      h('button', { class: 'primary', on: { click: () => openAddAccount() } }, ico('plus', 16), 'Ajouter un compte'))));
 }
 
 function contactsSection() {
@@ -2240,7 +2301,7 @@ function renderWelcome() {
   panel.appendChild(h('div', { style: 'display:flex;height:100%' }, h('div', { class: 'welcome' },
     h('h2', null, 'Toutes vos boîtes mail, un seul tri.'),
     h('p', null, 'Ajoutez vos comptes IMAP. MailHub récupère vos dossiers existants, et apprend à ranger vos prochains messages au fil de vos choix.'),
-    h('button', { class: 'primary', on: { click: openAddAccount } }, ico('plus', 16), 'Ajouter un compte'))));
+    h('button', { class: 'primary', on: { click: () => openAddAccount() } }, ico('plus', 16), 'Ajouter un compte'))));
 }
 
 // --------------------------------------------------------------- ajout de compte
@@ -2261,9 +2322,25 @@ const PRESETS = [
   { domains: ['proton.me', 'protonmail.com', 'pm.me'], imap: ['127.0.0.1', 1143, false], smtp: ['127.0.0.1', 1025, false], note: 'Proton Mail passe par Proton Mail Bridge, qui doit être installé et lancé sur cet ordinateur. Utilisez le mot de passe fourni par Bridge.' },
 ];
 
-function openAddAccount() {
+function colorPicker(initial) {
+  let value = initial;
+  const box = h('div', { class: 'color-grid' });
+  const custom = h('input', { type: 'color', value: HEX_RE.test(initial) ? initial : '#6366f1', 'aria-label': 'Couleur personnalisée', class: 'color-input' });
+  const draw = () => {
+    clear(box);
+    FOLDER_COLORS.forEach((c) => box.appendChild(h('button', { type: 'button', class: 'color-dot' + (c === value ? ' on' : ''), vars: { '--c': c }, title: c, 'aria-label': 'Couleur ' + c, on: { click: () => { value = c; custom.value = c; draw(); } } })));
+    box.appendChild(h('label', { class: 'color-custom', title: 'Couleur personnalisée' }, custom, h('span', null, 'Autre…')));
+  };
+  custom.addEventListener('input', () => { value = custom.value.toLowerCase(); draw(); });
+  draw();
+  return { el: box, get: () => value };
+}
+
+function openAddAccount(existing) {
+  const editing = !!existing;
+  const color = colorPicker(editing ? (existing.color || FOLDER_COLORS[0]) : FOLDER_COLORS[5]);
   const email = h('input', { type: 'email', placeholder: 'vous@exemple.com', spellcheck: 'false', autocomplete: 'off' });
-  const password = h('input', { type: 'password', autocomplete: 'off' });
+  const password = h('input', { type: 'password', autocomplete: 'off', placeholder: editing ? 'Laisser vide pour conserver le mot de passe actuel' : '' });
   const name = h('input', { type: 'text', placeholder: 'Perso, Travail…' });
   const note = h('div', { class: 'notice info', hidden: true });
   const imapHost = h('input', { type: 'text', placeholder: 'imap.exemple.com', spellcheck: 'false' });
@@ -2301,23 +2378,35 @@ function openAddAccount() {
       adv.open = true;
     }
   };
-  email.addEventListener('change', applyPreset);
+  if (editing) {
+    email.value = existing.email;
+    name.value = existing.name;
+    imapHost.value = existing.imap.host; imapPort.value = String(existing.imap.port); imapSec.value = existing.imap.secure ? 'ssl' : 'starttls';
+    user.value = existing.imap.user === existing.email ? '' : existing.imap.user;
+    if (existing.smtp) { smtpHost.value = existing.smtp.host; smtpPort.value = String(existing.smtp.port); smtpSec.value = existing.smtp.secure ? 'ssl' : 'starttls'; }
+    else { smtpHost.value = ''; }
+    adv.open = true;
+  }
+  // en modification, les serveurs ne sont réécrits que si le domaine de l'adresse change
+  email.addEventListener('change', () => { if (!editing || domainOf(email.value.trim()) !== domainOf(existing.email)) applyPreset(); });
 
   const dlg = openDialog({
-    title: 'Ajouter un compte',
-    subtitle: 'Connexion IMAP. Le mot de passe est chiffré sur cet ordinateur.',
+    title: editing ? 'Modifier le compte' : 'Ajouter un compte',
+    subtitle: editing ? 'Les paramètres sont vérifiés auprès du serveur avant d’être enregistrés.' : 'Connexion IMAP. Le mot de passe est chiffré sur cet ordinateur.',
     body: [
       h('div', { class: 'field' }, h('label', null, 'Adresse e-mail'), email),
       h('div', { class: 'field' }, h('label', null, 'Mot de passe'), password),
-      h('div', { class: 'field' }, h('label', null, 'Nom du compte (facultatif)'), name),
+      h('div', { class: 'field' }, h('label', null, editing ? 'Nom du compte' : 'Nom du compte (facultatif)'), name),
+      h('div', { class: 'field' }, h('label', null, 'Couleur du compte'), color.el),
       note, adv,
     ],
     buttons: [
       { label: 'Annuler', onClick: (d) => d.close() },
       {
-        id: 'add', label: 'Se connecter', kind: 'primary',
+        id: 'add', label: editing ? 'Enregistrer' : 'Se connecter', kind: 'primary',
         onClick: async (d, btn) => {
           const addr = email.value.trim();
+          if (editing) { await saveEdit(d, btn, addr); return; }
           if (!addr.includes('@') || !password.value) { d.error('Saisissez l’adresse e-mail et le mot de passe.'); return; }
           if (!imapHost.value.trim()) applyPreset();
           if (!imapHost.value.trim()) { d.error('Indiquez le serveur IMAP.'); return; }
@@ -2325,7 +2414,7 @@ function openAddAccount() {
           btn.textContent = 'Connexion…';
           d.error('');
           const cfg = {
-            name: name.value.trim() || addr, email: addr, password: password.value,
+            name: name.value.trim() || addr, email: addr, password: password.value, color: color.get(),
             imap: { host: imapHost.value.trim(), port: Number(imapPort.value) || 993, secure: imapSec.value === 'ssl', user: user.value.trim() || addr },
             smtp: smtpHost.value.trim() ? { host: smtpHost.value.trim(), port: Number(smtpPort.value) || 465, secure: smtpSec.value === 'ssl', user: user.value.trim() || addr } : null,
           };
@@ -2346,6 +2435,36 @@ function openAddAccount() {
       },
     ],
   });
+  async function saveEdit(d, btn, addr) {
+    if (!addr.includes('@')) { d.error('Saisissez une adresse e-mail valide.'); return; }
+    if (!imapHost.value.trim()) { d.error('Indiquez le serveur IMAP.'); return; }
+    const login = user.value.trim() || addr;
+    const imap = { host: imapHost.value.trim(), port: Number(imapPort.value) || 993, secure: imapSec.value === 'ssl', user: login };
+    const smtp = smtpHost.value.trim() ? { host: smtpHost.value.trim(), port: Number(smtpPort.value) || 465, secure: smtpSec.value === 'ssl', user: login } : null;
+    const patch = { name: name.value.trim() || addr, color: color.get(), smtp };
+    const serverChanged = addr !== existing.email || JSON.stringify(imap) !== JSON.stringify(existing.imap) || !!password.value;
+    if (serverChanged) { patch.email = addr; patch.imap = imap; }
+    if (password.value) patch.password = password.value;
+    btn.disabled = true;
+    btn.textContent = serverChanged ? 'Vérification…' : 'Enregistrement…';
+    d.error('');
+    try {
+      const updated = await call(api.accounts.update(existing.id, patch));
+      const i = state.accounts.findIndex((x) => x.id === existing.id);
+      if (i >= 0) state.accounts[i] = updated;
+      d.close();
+      renderSidebar();
+      renderList();
+      if (state.view === 'settings') renderSettingsPanel();
+      if (state.view === 'rules') renderRulesPanel();
+      toast('Compte mis à jour.');
+      if (serverChanged) { await loadFolders(existing.id); if (state.current.accountId === existing.id || state.current.accountId === 'unified') loadMessages({ silent: true }); }
+    } catch (err) {
+      btn.disabled = false;
+      btn.textContent = 'Enregistrer';
+      d.error(err.message);
+    }
+  }
   email.focus();
 }
 
@@ -2679,6 +2798,8 @@ window.addEventListener('unhandledrejection', (e) => {
   $('#nav-settings').append(ico('gear'), h('span', null, 'Réglages'));
   $('#btn-refresh').appendChild(ico('refresh', 17));
   $('#search-icon').appendChild(ico('search', 16));
+  $('#list-rows').addEventListener('scroll', loadMoreIfNeeded, { passive: true });
+  window.addEventListener('resize', debounce(loadMoreIfNeeded, 200));
   renderTabs();
   $('#btn-sortnow').append(ico('rules', 15), 'Trier maintenant');
   $('#btn-sortnow').addEventListener('click', sortNow);
@@ -2689,6 +2810,7 @@ window.addEventListener('unhandledrejection', (e) => {
   try {
     state.prefs = await call(api.prefs.get());
     applySizes();
+    applyTheme();
     window.applySidebarWidth();
     applyLayout();
     state.accounts = await call(api.accounts.list());
