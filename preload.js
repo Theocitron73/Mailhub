@@ -35,6 +35,8 @@ contextBridge.exposeInMainWorld('mailhub', {
     move: (accountId, folder, uids, dest) => invoke('messages:move', accountId, folder, uids, dest),
     remove: (accountId, folder, uids) => invoke('messages:remove', accountId, folder, uids),
     saveAttachment: (accountId, folder, uid, index) => invoke('messages:saveAttachment', accountId, folder, uid, index),
+    attachmentData: (accountId, folder, uid, index) => invoke('messages:attachmentData', accountId, folder, uid, index),
+    openAttachment: (accountId, folder, uid, index) => invoke('messages:openAttachment', accountId, folder, uid, index),
     send: (accountId, mail) => invoke('messages:send', accountId, mail),
     flagged: () => invoke('messages:flagged'),
     pickAttachments: () => invoke('messages:pickAttachments'),
@@ -70,6 +72,10 @@ contextBridge.exposeInMainWorld('mailhub', {
     importSent: () => invoke('contacts:importSent'),
   },
 
+  app: {
+    hide: () => invoke('app:hide'),
+  },
+
   // import des filtres Thunderbird
   thunderbird: {
     scan: () => invoke('thunderbird:scan'),
@@ -85,7 +91,7 @@ contextBridge.exposeInMainWorld('mailhub', {
 
   // événements poussés par le processus principal
   on: (channel, callback) => {
-    const allowed = ['mail:sorted', 'mail:new', 'mail:changed', 'account:status', 'app:error'];
+    const allowed = ['mail:sorted', 'mail:new', 'mail:changed', 'account:status', 'app:error', 'app:closeTab'];
     if (!allowed.includes(channel)) return () => {};
     const listener = (_event, payload) => callback(payload);
     ipcRenderer.on(channel, listener);

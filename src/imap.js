@@ -337,7 +337,7 @@ class ImapManager extends EventEmitter {
       const { parsed } = await this._fetchParsed(client, uid);
       const att = (parsed.attachments || [])[index];
       if (!att) throw new Error('Pièce jointe introuvable');
-      return { filename: att.filename || `piece-jointe-${index + 1}`, content: att.content };
+      return { filename: att.filename || `piece-jointe-${index + 1}`, contentType: String(att.contentType || '').toLowerCase(), content: att.content };
     }, { readOnly: true });
   }
 

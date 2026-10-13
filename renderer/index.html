@@ -3,7 +3,7 @@
 <head>
   <meta charset="utf-8">
   <meta http-equiv="Content-Security-Policy"
-        content="default-src 'self'; script-src 'self'; style-src 'self' 'unsafe-inline'; img-src 'self' data: https: http:; font-src 'self'; frame-src about:; base-uri 'none'; form-action 'none'">
+        content="default-src 'self'; script-src 'self'; style-src 'self' 'unsafe-inline'; img-src 'self' data: blob: https: http:; font-src 'self'; frame-src about: blob:; base-uri 'none'; form-action 'none'">
   <meta name="viewport" content="width=device-width, initial-scale=1">
   <title>MailHub</title>
   <link rel="stylesheet" href="styles.css">
@@ -23,6 +23,8 @@
     </aside>
 
     <div id="sb-splitter" role="separator" aria-orientation="vertical" tabindex="0" aria-label="Redimensionner la colonne de gauche" title="Glisser pour redimensionner, double-clic pour rétablir"></div>
+
+    <div id="tabbar" role="tablist" aria-label="Onglets" hidden></div>
 
     <!-- Vue « messages » : liste + lecture, dans la disposition choisie -->
     <div id="main" class="mode-right">
@@ -62,6 +64,9 @@
 
     <!-- Vue « panneau » : règles, réglages, accueil -->
     <section id="panel"></section>
+
+    <!-- Vue « onglet » : message ouvert en grand ou pièce jointe -->
+    <section id="tabview" aria-label="Onglet ouvert"></section>
   </div>
 
   <div id="drag-hint" hidden></div>

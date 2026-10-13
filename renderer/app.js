@@ -95,7 +95,9 @@ const state = {
   rules: [],
   contacts: [],
   view: 'mail',       // mail | rules | settings | welcome
-  expanded: false,    // message ouvert en plein écran par double-clic
+  tabs: [],           // onglets ouverts (messages, pièces jointes)
+  tab: 'list',        // onglet actif ('list' = Messages)
+  expanded: false,
   reading: false,     // le panneau de lecture occupe toute la zone
   listScroll: 0,
 };
@@ -431,21 +433,70 @@ async function sortNow() {
   finally { btn.disabled = false; }
 }
 
+const HEX_RE = /^#[0-9a-f]{6}$/;
+function normalizeHex(v) {
+  let x = String(v || '').trim().toLowerCase();
+  if (!x.startsWith('#')) x = '#' + x;
+  if (/^#[0-9a-f]{3}$/.test(x)) x = '#' + x[1] + x[1] + x[2] + x[2] + x[3] + x[3];
+  return HEX_RE.test(x) ? x : '';
+}
+
 function openColorDialog(acc, f, special) {
   const current = folderColor(acc.id, f.path);
   const label = special ? SPECIAL_LABEL[f.specialUse] : f.name;
   const grid = h('div', { class: 'color-grid' });
+  const mine = h('div', { class: 'color-grid' });
+  const mineBox = h('div', { class: 'field' }, h('label', null, 'Mes couleurs'), mine);
+  const picker = h('input', { type: 'color', value: current && HEX_RE.test(current) ? current : '#6366f1', 'aria-label': 'Choisir une couleur', class: 'color-input' });
+  const hex = h('input', { type: 'text', value: current || '', placeholder: '#1e90ff', maxlength: '7', spellcheck: 'false', 'aria-label': 'Code couleur hexadécimal', class: 'hex-input' });
+  const preview = h('span', { class: 'color-preview' });
+  const apply = h('button', { class: 'primary' }, 'Utiliser cette couleur');
   const dlg = openDialog({
     title: `Couleur de « ${label} »`, subtitle: 'La couleur colore l’icône du dossier dans la barre latérale.',
-    body: grid, buttons: [{ label: 'Fermer', onClick: (d) => d.close() }],
+    body: h('div', { style: 'display:grid;gap:16px' },
+      h('div', { class: 'field' }, h('label', null, 'Couleurs proposées'), grid),
+      mineBox,
+      h('div', { class: 'field' }, h('label', null, 'Couleur personnalisée'),
+        h('div', { class: 'custom-color' }, picker, hex, preview, apply),
+        h('small', null, 'Choisissez avec le sélecteur, ou saisissez un code (ex. #1e90ff).'))),
+    buttons: [{ label: 'Fermer', onClick: (d) => d.close() }],
   });
   const pick = async (c) => {
     try { await setFolderColor(acc.id, f.path, c); dlg.close(); } catch (err) { dlg.error(err.message); }
   };
-  FOLDER_COLORS.forEach((c) => grid.appendChild(h('button', {
-    class: 'color-dot' + (c === current ? ' on' : ''), vars: { '--c': c }, title: c, 'aria-label': 'Couleur ' + c, on: { click: () => pick(c) },
-  })));
+  const dot = (c, cls = '') => h('button', { class: 'color-dot' + (c === current ? ' on' : '') + cls, vars: { '--c': c }, title: c, 'aria-label': 'Couleur ' + c, on: { click: () => pick(c) } });
+  FOLDER_COLORS.forEach((c) => grid.appendChild(dot(c)));
   grid.appendChild(h('button', { class: 'color-dot none' + (!current ? ' on' : ''), title: 'Aucune couleur', on: { click: () => pick('') } }, 'Aucune'));
+
+  const saved = [...(state.prefs.customColors || [])];
+  if (current && HEX_RE.test(current) && !FOLDER_COLORS.includes(current) && !saved.includes(current)) saved.unshift(current);
+  saved.forEach((c) => mine.appendChild(dot(c)));
+  mineBox.hidden = !saved.length;
+
+  const sync = (from) => {
+    const v = normalizeHex(from === 'picker' ? picker.value : hex.value);
+    preview.style.background = v || 'transparent';
+    apply.disabled = !v;
+    if (v && from === 'picker') hex.value = v;
+    if (v && from === 'hex') picker.value = v;
+  };
+  picker.addEventListener('input', () => sync('picker'));
+  hex.addEventListener('input', () => sync('hex'));
+  hex.addEventListener('keydown', (e) => { if (e.key === 'Enter') { e.preventDefault(); apply.click(); } });
+  apply.addEventListener('click', async () => {
+    const v = normalizeHex(hex.value || picker.value);
+    if (!v) { dlg.error('Code couleur invalide : utilisez par exemple #1e90ff.'); return; }
+    try {
+      if (!FOLDER_COLORS.includes(v)) {
+        const list = [v, ...(state.prefs.customColors || []).filter((x) => x !== v)].slice(0, 10);
+        state.prefs = await call(api.prefs.set({ customColors: list }));
+      }
+      await setFolderColor(acc.id, f.path, v);
+      dlg.close();
+    } catch (err) { dlg.error(err.message); }
+  });
+  sync(hex.value ? 'hex' : 'picker');
+  if (!hex.value) { hex.value = ''; apply.disabled = false; preview.style.background = picker.value; hex.value = picker.value; }
 }
 
 async function renameFolder(acc, f) {
@@ -612,8 +663,8 @@ function applySizes() {
 
 function applyLayout() {
   const pref = layoutPref();
-  if (!state.opened) state.expanded = false;
-  const reading = !!state.opened && (pref === 'full' || state.expanded);
+  state.expanded = false;
+  const reading = false; // le plein écran passe désormais par les onglets
   const mode = pref === 'full' || reading ? 'full' : pref;
   const rows = $('#list-rows');
   if (reading && !state.reading) state.listScroll = rows.scrollTop; // la liste va être masquée
@@ -906,6 +957,7 @@ function renderList() {
       on: {
         click: (e) => onRowClick(e, m),
         dblclick: () => onRowDblClick(m),
+        auxclick: (e) => { if (e.button === 1) { e.preventDefault(); selectOnly(m); renderList(); openInTab(m); } },
         dragstart: (e) => onRowDrag(e, m, row),
         dragend: () => { row.classList.remove('dragging'); hideDragHint(); },
       },
@@ -975,13 +1027,11 @@ function onRowClick(e, m) {
   openMessage(m);
 }
 
-// Double-clic : le message passe en plein écran, quelle que soit la disposition
+// Double-clic (ou Entrée, clic molette) : le message s'ouvre dans un onglet, quelle que soit la disposition
 function onRowDblClick(m) {
   selectOnly(m);
-  state.expanded = true;
-  if (!state.opened || keyOf(state.opened.msg) !== keyOf(m)) { openMessage(m); return; }
   renderList();
-  renderReader();
+  openInTab(m);
 }
 
 function selectOnly(m) {
@@ -1056,9 +1106,10 @@ function afterRemoved(msgs) {
   state.messages = state.messages.filter((m) => !keys.has(keyOf(m)));
   state.total = Math.max(0, state.total - msgs.length);
   keys.forEach((k) => state.sel.delete(k));
+  [...state.tabs].filter((t) => keys.has(keyOf(t.msg))).forEach((t) => closeTab(t.id));
   if (openedKey && keys.has(openedKey)) {
     const next = state.messages[Math.min(firstIdx, state.messages.length - 1)];
-    if (next && !state.reading) { selectOnly(next); openMessage(next); }
+    if (next && layoutPref() !== 'full') { selectOnly(next); openMessage(next); }
     else { state.opened = null; state.expanded = false; }
   }
   renderList();
@@ -1348,16 +1399,16 @@ function openFilePicker(msgs) {
 
 // -------------------------------------------------------------------- lecture
 
-async function openMessage(m) {
-  state.opened = { msg: m, detail: null, loading: true, error: '', allowRemote: state.prefs.remoteContent === 'always' };
-  renderList();
-  renderReader();
-  const mine = state.opened;
+const newOpened = (m) => ({ msg: m, detail: null, loading: true, error: '', allowRemote: state.prefs.remoteContent === 'always' });
+
+// Charge le contenu d'un message ouvert (volet de lecture ou onglet) ; renvoie false s'il a été abandonné entre-temps.
+async function loadDetail(o, stillWanted) {
+  const m = o.msg;
   try {
     const detail = await call(api.messages.get(m.accountId, m.folder, m.uid));
-    if (state.opened !== mine) return;
-    mine.detail = detail;
-    mine.loading = false;
+    if (!stillWanted()) return false;
+    o.detail = detail;
+    o.loading = false;
     if (!m.seen) {
       m.seen = true;
       const f = folderInfo(m.accountId, m.folder);
@@ -1366,11 +1417,169 @@ async function openMessage(m) {
       renderList();
     }
   } catch (err) {
-    if (state.opened !== mine) return;
-    mine.loading = false;
-    mine.error = err.message;
+    if (!stillWanted()) return false;
+    o.loading = false;
+    o.error = err.message;
   }
+  return true;
+}
+
+async function openMessage(m) {
+  state.opened = newOpened(m);
+  renderList();
   renderReader();
+  const mine = state.opened;
+  if (await loadDetail(mine, () => state.opened === mine)) renderReader();
+}
+
+// ------------------------------------------------------------------- onglets
+// L'onglet « Messages » (liste, règles, réglages) est toujours là ; les messages ouverts en grand
+// et les pièces jointes ouvrent chacun un onglet que l'on ferme avec sa croix (ou Ctrl/Cmd+W, clic molette).
+
+const MAX_TABS = 20;
+let tabSeq = 0;
+const activeTabObj = () => state.tabs.find((t) => t.id === state.tab) || null;
+
+function releaseTab(t) { if (t && t.blobUrl) { try { URL.revokeObjectURL(t.blobUrl); } catch (_) { /* ignore */ } t.blobUrl = null; } }
+
+function showTab(id) {
+  state.tab = state.tabs.some((t) => t.id === id) ? id : 'list';
+  document.body.classList.toggle('tab-view', state.tab !== 'list');
+  renderTabs();
+  renderTabContent();
+}
+
+function closeTab(id) {
+  const i = state.tabs.findIndex((t) => t.id === id);
+  if (i < 0) return;
+  releaseTab(state.tabs[i]);
+  state.tabs.splice(i, 1);
+  if (state.tab === id) {
+    const next = state.tabs[Math.min(i, state.tabs.length - 1)];
+    showTab(next ? next.id : 'list');
+  } else renderTabs();
+}
+
+function closeActiveTab() { if (state.tab !== 'list') closeTab(state.tab); }
+
+function openTab(tab) {
+  const same = state.tabs.find((t) => t.key === tab.key);
+  if (same) { showTab(same.id); return same; }
+  if (state.tabs.length >= MAX_TABS) { toast(`${MAX_TABS} onglets au maximum : fermez-en un avant d’en ouvrir un autre.`, { error: true }); return null; }
+  tab.id = 't' + (++tabSeq);
+  state.tabs.push(tab);
+  showTab(tab.id);
+  return tab;
+}
+
+async function openInTab(m) {
+  const tab = openTab({ key: 'm|' + keyOf(m), kind: 'mail', msg: m, o: newOpened(m) });
+  if (!tab || tab.loaded) return;
+  tab.loaded = true;
+  const ok = await loadDetail(tab.o, () => state.tabs.includes(tab));
+  if (ok && state.tab === tab.id) renderTabContent();
+  else if (ok) renderTabs();
+}
+
+async function openAttachmentTab(m, a) {
+  const tab = openTab({ key: 'a|' + keyOf(m) + '|' + a.index, kind: 'att', msg: m, att: a, data: null, loading: true, error: '' });
+  if (!tab || tab.loaded) return;
+  tab.loaded = true;
+  try {
+    tab.data = await call(api.messages.attachmentData(m.accountId, m.folder, m.uid, a.index));
+    if (tab.data.kind === 'pdf') {
+      const bytes = Uint8Array.from(atob(tab.data.base64), (c) => c.charCodeAt(0));
+      tab.blobUrl = URL.createObjectURL(new Blob([bytes], { type: 'application/pdf' }));
+      tab.data.base64 = '';
+    }
+  } catch (err) { tab.error = err.message; }
+  tab.loading = false;
+  if (!state.tabs.includes(tab)) { releaseTab(tab); return; }
+  if (state.tab === tab.id) renderTabContent();
+}
+
+function tabTitle(t) {
+  if (t.kind === 'att') return t.att.filename;
+  return (t.o.detail && t.o.detail.subject) || t.msg.subject || 'Message';
+}
+
+function renderTabs() {
+  const bar = $('#tabbar');
+  clear(bar);
+  const any = state.tabs.length > 0;
+  bar.hidden = !any;
+  document.body.classList.toggle('has-tabs', any);
+  if (!any) return;
+  const tabEl = (id, icon, title, closable) => {
+    const el = h('div', {
+      class: 'tab-item' + (state.tab === id ? ' active' : ''), role: 'tab', 'aria-selected': String(state.tab === id), tabindex: '0', title,
+      on: {
+        click: () => showTab(id),
+        auxclick: (e) => { if (e.button === 1 && closable) { e.preventDefault(); closeTab(id); } },
+        mousedown: (e) => { if (e.button === 1) e.preventDefault(); },
+        keydown: (e) => { if (e.key === 'Enter' || e.key === ' ') { e.preventDefault(); showTab(id); } },
+      },
+    }, ico(icon, 15), h('span', { class: 'tab-title' }, title));
+    if (closable) {
+      el.appendChild(h('button', { class: 'tab-close', title: 'Fermer l’onglet', 'aria-label': 'Fermer l’onglet ' + title, tabindex: '-1', on: { click: (e) => { e.stopPropagation(); closeTab(id); } } }, ico('close', 13)));
+    }
+    return el;
+  };
+  bar.appendChild(tabEl('list', 'inbox', 'Messages', false));
+  state.tabs.forEach((t) => bar.appendChild(tabEl(t.id, t.kind === 'att' ? 'clip' : 'mail', tabTitle(t), true)));
+}
+
+function cycleTab(delta) {
+  const ids = ['list', ...state.tabs.map((t) => t.id)];
+  const i = ids.indexOf(state.tab);
+  showTab(ids[(i + delta + ids.length) % ids.length]);
+}
+
+function renderTabContent() {
+  const view = $('#tabview');
+  clear(view);
+  const t = activeTabObj();
+  if (!t) return;
+  try {
+    if (t.kind === 'mail') renderMailInto(view, t.o, () => { renderTabContent(); });
+    else renderAttachmentInto(view, t);
+  } catch (err) {
+    console.error(err);
+    view.appendChild(h('div', { class: 'empty' }, h('h2', null, 'Affichage impossible'), h('p', null, err.message || String(err))));
+  }
+}
+
+const BLOCKED_OPEN = /\.(exe|bat|cmd|com|scr|msi|msp|js|jse|vbs|vbe|wsf|wsh|ps1|psm1|sh|command|app|jar|dmg|pkg|lnk|hta|reg|cpl|scf|pif|gadget|appimage|deb|rpm|apk|url|iso)$/i;
+
+function renderAttachmentInto(view, t) {
+  const a = t.att;
+  const m = t.msg;
+  const bar = h('div', { class: 'att-head' },
+    h('div', { class: 'att-title' }, ico('clip', 18), h('div', null, h('h2', null, a.filename), h('small', null, `${fmtSize(a.size)}${a.contentType ? ' · ' + a.contentType : ''} · pièce jointe de « ${m.subject} »`))),
+    h('div', { class: 'att-actions' },
+      h('button', { class: 'ghost', on: { click: () => openInTab(m) } }, ico('mail', 16), 'Voir le message'),
+      h('button', { class: 'ghost', on: { click: () => saveAttachment(m, a) } }, ico('download', 16), 'Enregistrer…'),
+      BLOCKED_OPEN.test(a.filename) ? null : h('button', { class: 'ghost', title: 'L’ouvre avec l’application associée à ce type de fichier', on: { click: async () => {
+        try { await call(api.messages.openAttachment(m.accountId, m.folder, m.uid, a.index)); } catch (err) { toast(err.message, { error: true }); }
+      } } }, 'Ouvrir avec l’application')));
+  view.appendChild(bar);
+  const body = h('div', { class: 'att-body' });
+  view.appendChild(body);
+  if (t.loading) { body.appendChild(h('div', { class: 'loading' }, 'Chargement de la pièce jointe…')); return; }
+  if (t.error) { body.appendChild(h('div', { class: 'empty' }, h('h2', null, 'Pièce jointe illisible'), h('p', null, t.error))); return; }
+  const d = t.data;
+  if (d.kind === 'image') {
+    const img = h('img', { src: d.dataUrl, alt: a.filename, class: 'att-img fit', title: 'Cliquer pour afficher en taille réelle' });
+    img.addEventListener('click', () => img.classList.toggle('fit'));
+    body.appendChild(h('div', { class: 'att-imgwrap' }, img));
+  } else if (d.kind === 'pdf' && t.blobUrl) {
+    body.appendChild(h('iframe', { class: 'att-pdf', src: t.blobUrl, title: a.filename }));
+  } else if (d.kind === 'text') {
+    body.appendChild(h('pre', { class: 'att-text' }, d.text + (d.truncated ? '\n\n… (aperçu limité au début du fichier)' : '')));
+  } else {
+    body.appendChild(h('div', { class: 'empty' }, h('h2', null, 'Aperçu non disponible'),
+      h('p', null, d.tooBig ? 'Ce fichier est trop volumineux pour être prévisualisé.' : 'MailHub ne sait pas afficher ce type de fichier. Enregistrez-le ou ouvrez-le avec l’application associée.')));
+  }
 }
 
 function hasRemoteContent(html) {
@@ -1425,10 +1634,11 @@ function renderReaderContent() {
     reader.appendChild(h('div', { class: 'reader-empty' }, ico('mail', 40), h('div', null, 'Sélectionnez un message pour le lire')));
     return;
   }
-  if (state.reading) {
-    reader.appendChild(h('div', { class: 'reader-back' },
-      h('button', { class: 'ghost', on: { click: closeReader } }, ico('back', 16), 'Retour à la liste')));
-  }
+  renderMailInto(reader, o, renderReader);
+}
+
+// Contenu d'un message (en-tête, pièces jointes, rangement, corps) dans un conteneur : volet de lecture ou onglet.
+function renderMailInto(reader, o, redraw) {
   const m = o.msg;
   if (o.loading) { reader.appendChild(h('div', { class: 'loading' }, 'Ouverture du message…')); return; }
   if (o.error) {
@@ -1461,7 +1671,9 @@ function renderReaderContent() {
 
   if (d.attachments.length) {
     reader.appendChild(h('div', { class: 'attachments' }, d.attachments.map((a) =>
-      h('button', { class: 'att-chip', title: 'Enregistrer', on: { click: () => saveAttachment(m, a) } }, ico('clip', 15), a.filename, h('span', { class: 'size' }, fmtSize(a.size))))));
+      h('span', { class: 'att-chip' },
+        h('button', { class: 'att-open', title: 'Ouvrir dans un onglet', on: { click: () => openAttachmentTab(m, a) } }, ico('clip', 15), a.filename, h('span', { class: 'size' }, fmtSize(a.size))),
+        h('button', { class: 'att-save', title: 'Enregistrer', 'aria-label': 'Enregistrer ' + a.filename, on: { click: () => saveAttachment(m, a) } }, ico('download', 15))))));
   }
 
   // bandeau de rangement
@@ -1476,7 +1688,7 @@ function renderReaderContent() {
 
   if (d.html && hasRemoteContent(d.html) && !o.allowRemote) {
     reader.appendChild(h('div', { class: 'remote-banner' }, h('span', null, 'Les images distantes sont masquées pour protéger votre vie privée.'),
-      h('button', { class: 'ghost', on: { click: () => { o.allowRemote = true; renderReader(); } } }, 'Afficher les images')));
+      h('button', { class: 'ghost', on: { click: () => { o.allowRemote = true; redraw(); } } }, 'Afficher les images')));
   }
 
   const frame = h('iframe', { class: 'mail-frame', sandbox: 'allow-popups', title: 'Contenu du message', referrerpolicy: 'no-referrer' });
@@ -2394,15 +2606,32 @@ $('#search').addEventListener('input', debounce((e) => {
   loadMessages();
 }, 350));
 
+api.on('app:closeTab', () => {
+  if (state.tab !== 'list') closeActiveTab();
+  else api.app.hide();
+});
+
 document.addEventListener('keydown', (e) => {
+  if ((e.ctrlKey || e.metaKey) && !e.altKey && state.tabs.length && !$('#modal-root').firstChild) {
+    if (e.key === 'Tab' || e.key === 'PageDown' || e.key === 'PageUp') {
+      e.preventDefault();
+      cycleTab(e.key === 'PageUp' || (e.key === 'Tab' && e.shiftKey) ? -1 : 1);
+      return;
+    }
+  }
   const tag = (e.target.tagName || '').toLowerCase();
   if (['input', 'textarea', 'select'].includes(tag) || $('#modal-root').firstChild || state.view !== 'mail') return;
   if (e.metaKey || e.ctrlKey || e.altKey) return;
-  if (e.key === 'Escape') { if (state.reading) closeReader(); return; }
+  if (state.tab !== 'list') {
+    const t = activeTabObj();
+    if (e.key === 'r' && t && t.kind === 'mail' && t.o.detail) { e.preventDefault(); replyTo(t.o); }
+    return; // la liste est masquée : ses raccourcis ne s'appliquent pas
+  }
+  if (e.key === 'Escape') return;
   const selKeys = [...state.sel];
   const idx = state.opened ? state.messages.findIndex((m) => keyOf(m) === keyOf(state.opened.msg))
     : (selKeys.length === 1 ? state.messages.findIndex((m) => keyOf(m) === selKeys[0]) : -1);
-  if (e.key === 'Enter' && !state.reading && selKeys.length === 1) {
+  if (e.key === 'Enter' && selKeys.length === 1) {
     const m = state.messages[idx];
     if (m) { e.preventDefault(); onRowDblClick(m); return; }
   }
@@ -2411,7 +2640,7 @@ document.addEventListener('keydown', (e) => {
     const m = state.messages[i];
     if (!m) return;
     selectOnly(m);
-    if (layoutPref() === 'full' && !state.reading) renderList(); else openMessage(m);
+    if (layoutPref() === 'full') renderList(); else openMessage(m);
     const row = $('#list-rows').children[i];
     if (row && row.scrollIntoView) row.scrollIntoView({ block: 'nearest' });
   };
@@ -2450,6 +2679,7 @@ window.addEventListener('unhandledrejection', (e) => {
   $('#nav-settings').append(ico('gear'), h('span', null, 'Réglages'));
   $('#btn-refresh').appendChild(ico('refresh', 17));
   $('#search-icon').appendChild(ico('search', 16));
+  renderTabs();
   $('#btn-sortnow').append(ico('rules', 15), 'Trier maintenant');
   $('#btn-sortnow').addEventListener('click', sortNow);
   $('#sort-by').addEventListener('change', (e) => setSort(e.target.value, e.target.value === 'date' ? 'desc' : 'asc'));

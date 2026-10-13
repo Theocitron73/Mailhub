@@ -9,6 +9,7 @@ const {
 const { Store } = require('./src/store');
 const { ImapManager, friendlyError } = require('./src/imap');
 const rulesio = require('./src/rulesio');
+const { attachmentPreview } = require('./src/attachment');
 const { cleanImage } = require('./src/signature');
 const tb = require('./src/thunderbird');
 
@@ -126,7 +127,13 @@ function buildMenu() {
   const isMac = process.platform === 'darwin';
   const template = [
     ...(isMac ? [{ role: 'appMenu' }] : []),
-    { role: 'fileMenu' },
+    {
+      label: 'Fichier',
+      submenu: [
+        { label: 'Fermer l’onglet', accelerator: 'CmdOrCtrl+W', click: () => send('app:closeTab') },
+        ...(isMac ? [] : [{ type: 'separator' }, { role: 'quit' }]),
+      ],
+    },
     { role: 'editMenu' },
     {
       label: 'Affichage',
@@ -139,7 +146,10 @@ function buildMenu() {
         { role: 'zoomOut' },
       ],
     },
-    { role: 'windowMenu' },
+    {
+      label: 'Fenêtre',
+      submenu: [{ role: 'minimize' }, ...(isMac ? [{ role: 'zoom' }, { type: 'separator' }, { role: 'front' }] : [])],
+    },
   ];
   Menu.setApplicationMenu(Menu.buildFromTemplate(template));
 }
@@ -155,6 +165,13 @@ function handle(channel, fn) {
     }
   });
 }
+
+const BLOCKED_OPEN = /\.(exe|bat|cmd|com|scr|msi|msp|js|jse|vbs|vbe|wsf|wsh|ps1|psm1|sh|command|app|jar|dmg|pkg|lnk|hta|reg|cpl|scf|pif|gadget|appimage|deb|rpm|apk|url|iso)$/i;
+const attachmentsTmp = () => {
+  const dir = path.join(app.getPath('temp'), 'mailhub-attachments');
+  fs.mkdirSync(dir, { recursive: true });
+  return dir;
+};
 
 function registerIpc() {
   // ---- comptes
@@ -202,6 +219,27 @@ function registerIpc() {
     }));
     return results.flat().sort((a, b) => new Date(b.date) - new Date(a.date)).slice(0, limit);
   });
+
+  // Aperçu d'une pièce jointe dans un onglet : le type est décidé ici, jamais par l'interface
+  handle('messages:attachmentData', async (accountId, folder, uid, index) => {
+    const att = await manager.getAttachment(accountId, folder, uid, index);
+    return attachmentPreview(att);
+  });
+
+  // Ouvre une pièce jointe avec l'application associée (copie temporaire), sauf types exécutables
+  handle('messages:openAttachment', async (accountId, folder, uid, index) => {
+    const att = await manager.getAttachment(accountId, folder, uid, index);
+    const name = path.basename(att.filename).replace(/[\\/:*?"<>|\u0000-\u001f]/g, '_') || 'piece-jointe';
+    if (BLOCKED_OPEN.test(name)) throw new Error('Ce type de fichier ne peut pas être ouvert directement, par sécurité. Enregistrez-le d’abord.');
+    const dir = fs.mkdtempSync(path.join(attachmentsTmp(), 'a-'));
+    const file = path.join(dir, name);
+    fs.writeFileSync(file, att.content);
+    const err = await shell.openPath(file);
+    if (err) throw new Error('Impossible d’ouvrir ce fichier : ' + err);
+    return { ok: true };
+  });
+
+  handle('app:hide', () => { if (mainWindow) mainWindow.hide(); return true; });
 
   handle('messages:saveAttachment', async (accountId, folder, uid, index) => {
     const att = await manager.getAttachment(accountId, folder, uid, index);
@@ -468,6 +506,7 @@ app.whenReady().then(() => {
 
 app.on('before-quit', () => {
   quitting = true;
+  try { fs.rmSync(path.join(app.getPath('temp'), 'mailhub-attachments'), { recursive: true, force: true }); } catch (_) { /* ignore */ }
   if (manager) manager.disconnectAll();
 });
 
