@@ -161,6 +161,7 @@ function subUnseen(accountId, f) {
 }
 
 function folderLabel(accountId, path) {
+  if (!path) return '';
   const f = folderInfo(accountId, path);
   if (f && SPECIAL_LABEL[f.specialUse]) return SPECIAL_LABEL[f.specialUse];
   if (path.toUpperCase() === 'INBOX') return SPECIAL_LABEL['\\Inbox'];
