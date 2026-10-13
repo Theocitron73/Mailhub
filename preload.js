@@ -41,6 +41,7 @@ contextBridge.exposeInMainWorld('mailhub', {
     markAllRead: (accountId, folder) => invoke('messages:markAllRead', accountId, folder),
     markAllReadInAccount: (accountId) => invoke('messages:markAllReadInAccount', accountId),
     deleteAllInFolder: (accountId, folder) => invoke('messages:deleteAllInFolder', accountId, folder),
+    saveDraft: (accountId, mail) => invoke('messages:saveDraft', accountId, mail),
     flagged: () => invoke('messages:flagged'),
     pickAttachments: () => invoke('messages:pickAttachments'),
   },

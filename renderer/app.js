@@ -2367,7 +2367,31 @@ function openCompose(init = {}) {
       )
     ),
     buttons: [
-      { label: 'Annuler', onClick: (d) => d.close() },
+      { label: 'Annuler', onClick: (d) => {
+          const hasContent = to.value.trim() || cc.value.trim() || subject.value.trim() || editor.innerHTML.trim() || files.length > 0;
+          if (!hasContent) { d.close(); return; }
+          openDialog({
+            title: 'Fermer sans envoyer ?',
+            body: h('p', { style: 'margin:0' }, 'Voulez-vous enregistrer ce message comme brouillon ?'),
+            buttons: [
+              { label: 'Supprimer', kind: 'danger', onClick: (d2) => { d2.close(); d.close(); } },
+              { label: 'Annuler', onClick: (d2) => d2.close() },
+              { label: 'Enregistrer', kind: 'primary', onClick: async (d2) => {
+                 try {
+                    await call(api.messages.saveDraft(from.value, {
+                        to: to.value.trim(), cc: cc.value.trim(), subject: subject.value,
+                        html: editor.innerHTML, text: editor.innerText || editor.textContent || '',
+                        attachments: files, signatureId: sigSel.value || undefined, signatureBlock: currentBlock,
+                    }));
+                    toast('Brouillon enregistré.');
+                    d2.close();
+                    d.close();
+                 } catch (err) { d2.error(err.message); }
+              } },
+            ]
+          });
+      } },
+
       {
         id: 'send', label: 'Envoyer', kind: 'primary',
         onClick: async (d, btn) => {

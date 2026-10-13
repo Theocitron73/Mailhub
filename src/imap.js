@@ -702,7 +702,7 @@ class ImapManager extends EventEmitter {
       html: mail.html || undefined,
       inReplyTo: mail.inReplyTo || undefined,
       references: mail.references && mail.references.length ? mail.references : undefined,
-      attachments: (mail.attachments || []).map((p) => ({ path: p })),
+      attachments: (mail.attachments || []).map((p) => ({ path: p.path || p })),
     };
     // Signature avec images : les images viennent du compte (jamais de l'interface) et sont intégrées au message
     if (mail.signatureId) {
@@ -730,6 +730,32 @@ class ImapManager extends EventEmitter {
         console.error('Copie dans Envoyés impossible :', err.message);
       }
     }
+    return { ok: true };
+  }
+
+  async saveDraft(accountId, mail) {
+    const acc = this.store.getAccount(accountId);
+    if (!acc) throw new Error('Compte introuvable');
+    
+    const message = {
+      from: { name: acc.name, address: acc.email },
+      to: mail.to,
+      cc: mail.cc || undefined,
+      bcc: mail.bcc || undefined,
+      subject: mail.subject || '',
+      text: mail.text || '',
+      html: mail.html || undefined,
+      attachments: (mail.attachments || []).map((p) => ({ path: p.path || p })),
+    };
+
+    const raw = await new Promise((resolve, reject) =>
+      new MailComposer(message).compile().build((e, b) => (e ? reject(e) : resolve(b)))
+    );
+    
+    const client = await this._ops(accountId);
+    const drafts = await this._findSpecial(client, '\\Drafts', /^(drafts|brouillons)/i);
+    if (!drafts) throw new Error('Dossier brouillons introuvable.');
+    await client.append(drafts, raw);
     return { ok: true };
   }
 }
