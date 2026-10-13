@@ -168,6 +168,7 @@ class Store {
 
   addRule(rule) {
     this.data.rules.push(rule);
+    this.data.rules = consolidateRules(this.data.rules);
     this._save();
     return rule;
   }
@@ -175,6 +176,7 @@ class Store {
   updateRule(rule) {
     const i = this.data.rules.findIndex((r) => r.id === rule.id);
     if (i >= 0) this.data.rules[i] = rule;
+    this.data.rules = consolidateRules(this.data.rules);
     this._save();
     return rule;
   }
@@ -188,6 +190,7 @@ class Store {
   addRules(list) {
     const added = list.map((r) => ({ ...r, id: r.id || newId() }));
     this.data.rules.push(...added);
+    this.data.rules = consolidateRules(this.data.rules);
     this._save();
     return added;
   }

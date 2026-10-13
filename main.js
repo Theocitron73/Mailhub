@@ -479,9 +479,16 @@ function registerIpc() {
 
   // ---- mises à jour automatiques
   handle('updates:check', async () => {
-    if (!autoUpdater || !app.isPackaged) return { update: false, reason: 'mode dev' };
-    const res = await autoUpdater.checkForUpdates();
-    return { update: !!res && !!res.updateInfo, info: res && res.updateInfo };
+    if (!autoUpdater) throw new Error('Module de mise à jour non disponible');
+    if (!app.isPackaged) {
+      return { update: false, version: app.getVersion(), dev: true, message: 'Mode développement (mises à jour automatiques désactivées)' };
+    }
+    try {
+      const res = await autoUpdater.checkForUpdates();
+      return { update: !!res && !!res.updateInfo, version: app.getVersion(), latest: res?.updateInfo?.version, info: res && res.updateInfo };
+    } catch (err) {
+      throw new Error('Impossible de vérifier les mises à jour : ' + err.message);
+    }
   });
   handle('updates:install', () => {
     if (autoUpdater) {
@@ -549,7 +556,9 @@ app.whenReady().then(() => {
 });
 
 function initAutoUpdater() {
-  if (!autoUpdater || !app.isPackaged) return;
+  if (!autoUpdater) return;
+  autoUpdater.logger = console;
+  if (!app.isPackaged) return;
 
   autoUpdater.autoDownload = true;
   autoUpdater.autoInstallOnAppQuit = true;
@@ -567,11 +576,15 @@ function initAutoUpdater() {
   });
 
   setTimeout(() => {
-    autoUpdater.checkForUpdates().catch(() => {});
+    autoUpdater.checkForUpdates().catch((err) => {
+      console.warn('Erreur vérification mise à jour:', err.message);
+    });
   }, 10000);
 
   setInterval(() => {
-    autoUpdater.checkForUpdates().catch(() => {});
+    autoUpdater.checkForUpdates().catch((err) => {
+      console.warn('Erreur intervalle mise à jour:', err.message);
+    });
   }, 4 * 60 * 60 * 1000);
 }
 

@@ -255,6 +255,16 @@ class ImapManager extends EventEmitter {
     });
   }
 
+  async deleteAllInFolder(accountId, folder) {
+    return this.withMailbox(accountId, folder, async (client) => {
+      const found = await client.search({ all: true }, { uid: true });
+      if (found && found.length) {
+        await client.messageDelete(found, { uid: true });
+      }
+      return { deletedCount: found ? found.length : 0 };
+    });
+  }
+
   async _findSpecial(client, use, nameRegex) {
     const list = await client.list();
     const bySpecial = list.find((f) => f.specialUse === use);

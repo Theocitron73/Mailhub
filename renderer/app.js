@@ -460,6 +460,25 @@ function openFolderMenu(e, acc, f, special) {
         toast('Dossier marqué comme lu.');
       } catch (err) { toast(err.message, { error: true }); }
     }},
+    { label: 'Vider le dossier (supprimer tous les messages)', icon: 'trash', danger: true, onClick: async () => {
+      const ok = await confirmDialog({
+        title: `Vider « ${f.name} » ?`,
+        body: 'Tous les messages de ce dossier seront définitivement supprimés.',
+        confirmText: 'Vider le dossier',
+        danger: true,
+      });
+      if (!ok) return;
+      try {
+        await call(api.messages.deleteAllInFolder(acc.id, f.path));
+        toast('Dossier vidé avec succès.');
+        await loadFolders(acc.id);
+        if (state.current.accountId === acc.id && state.current.folder === f.path) {
+          state.messages = [];
+          renderList();
+          renderReader();
+        }
+      } catch (err) { toast(err.message, { error: true }); }
+    }},
     { separator: true },
     { label: 'Nouveau sous-dossier', icon: 'plus', onClick: () => openNewFolderDialog(acc.id, f.path) },
     { label: 'Déplacer dans un autre dossier…', icon: 'folder', disabled: special, onClick: () => openMoveFolderDialog(acc, f) },
@@ -2598,6 +2617,17 @@ async function renderSettingsPanel() {
     h('h3', null, 'Carnet d’adresses'),
     h('p', { class: 'lead', style: 'margin:0 0 10px' }, 'MailHub retient les personnes à qui vous écrivez et vous les propose quand vous saisissez un destinataire.'),
     contactsSection(),
+    h('h3', null, 'Notifications'),
+    h('label', { class: 'check' },
+      h('input', { type: 'checkbox', checked: state.prefs.notifications !== false, on: { change: async (e) => {
+        try {
+          state.prefs = await call(api.prefs.set({ notifications: e.target.checked }));
+          if (e.target.checked && typeof Notification !== 'undefined' && Notification.permission !== 'granted') {
+            Notification.requestPermission();
+          }
+        } catch (err) { e.target.checked = !e.target.checked; toast(err.message, { error: true }); }
+      } } }),
+      h('span', null, 'Activer les notifications système pour les nouveaux e-mails et les messages rangés automatiquement.')),
     h('h3', null, 'Démarrage'),
     h('label', { class: 'check' },
       h('input', { type: 'checkbox', checked: !!state.prefs.openAtLogin, on: { change: async (e) => {
@@ -2605,6 +2635,29 @@ async function renderSettingsPanel() {
         catch (err) { e.target.checked = !e.target.checked; toast(err.message, { error: true }); }
       } } }),
       h('span', null, 'Lancer MailHub à l’ouverture de session, sans fenêtre. Le tri automatique ne fonctionne que lorsque MailHub est en marche.')),
+    h('h3', null, 'Mises à jour'),
+    h('div', { class: 'toolbar-row', style: 'align-items:center; gap:12px; margin-bottom:12px;' },
+      h('button', { class: 'ghost', on: { click: async (e) => {
+        const btn = e.target;
+        btn.disabled = true;
+        btn.textContent = 'Vérification…';
+        try {
+          const res = await call(api.updates.check());
+          if (res.dev) {
+            toast('Mode développement : les mises à jour automatiques sont désactivées.');
+          } else if (res.update) {
+            toast(`Mise à jour disponible (${res.latest || res.info?.version}) !`);
+          } else {
+            toast('MailHub est à jour.');
+          }
+        } catch (err) {
+          toast(err.message, { error: true });
+        } finally {
+          btn.disabled = false;
+          btn.textContent = 'Vérifier les mises à jour';
+        }
+      } } }, 'Vérifier les mises à jour')
+    ),
     h('h3', null, 'Comptes'),
     !encryption ? h('div', { class: 'notice' }, 'Le chiffrement du système (Trousseau macOS ou Windows) n’est pas disponible : les mots de passe sont enregistrés avec un simple encodage. Utilisez des mots de passe d’application.') : null,
     state.accounts.map((a) => h('div', { class: 'acc-row', vars: { '--acc': a.color } },
@@ -3164,6 +3217,16 @@ const refreshAccount = debounce(async (accountId) => {
 api.on('mail:changed', ({ accountId }) => refreshAccount(accountId));
 api.on('mail:sorted', ({ moved }) => {
   toast(`${moved.length} ${plural(moved.length, 'nouveau message rangé', 'nouveaux messages rangés')} automatiquement.`);
+  if (state.prefs.notifications !== false && typeof Notification !== 'undefined') {
+    if (Notification.permission === 'granted' && moved.length) {
+      const counts = {};
+      moved.forEach((m) => { counts[m.folder] = (counts[m.folder] || 0) + 1; });
+      const body = Object.entries(counts).map(([f, n]) => `${n} → ${f}`).join('\n');
+      new Notification(`MailHub : ${moved.length} message(s) trié(s)`, { body });
+    } else if (Notification.permission !== 'denied' && Notification.permission !== 'granted') {
+      Notification.requestPermission();
+    }
+  }
 });
 api.on('account:status', ({ accountId, state: st }) => { state.status[accountId] = st; renderSidebar(); });
 api.on('app:error', ({ message }) => toast(message, { error: true }));

@@ -752,6 +752,24 @@ async function handleChannel(channel, args) {
     return true;
   }
 
+  if (channel === 'messages:deleteAllInFolder') {
+    const [accountId, folder] = args;
+    const acc = store.getAccount(accountId);
+    if (acc && acc.imap && acc.imap.host !== 'demo' && imapManager) {
+      try {
+        return await imapManager.deleteAllInFolder(accountId, folder);
+      } catch (e) {
+        console.warn('Real IMAP deleteAllInFolder error:', e.message);
+      }
+    }
+    const msgs = demoStore.messages[accountId] || [];
+    const initialLen = msgs.length;
+    demoStore.messages[accountId] = msgs.filter((m) => m.folder !== folder);
+    const deletedCount = initialLen - demoStore.messages[accountId].length;
+    saveDemoStore();
+    return { deletedCount };
+  }
+
   if (channel === 'messages:flagged') {
     const accounts = store.listAccounts();
     const results = [];
