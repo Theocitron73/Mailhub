@@ -179,7 +179,15 @@ class ImapManager extends EventEmitter {
 
   async withMailbox(accountId, path, fn, { readOnly = false } = {}) {
     const client = await this._ops(accountId);
-    const lock = await client.getMailboxLock(path, { readOnly });
+    let lock;
+    try {
+      lock = await client.getMailboxLock(path, { readOnly });
+    } catch (err) {
+      if (err.message && err.message.includes("Mailbox doesn't exist")) {
+        throw new Error(`Le dossier « ${path} » n'existe plus sur le serveur.`);
+      }
+      throw err;
+    }
     try {
       // Si la boîte était déjà sélectionnée, son état en cache peut être périmé
       // (courrier arrivé depuis un autre appareil) : NOOP force le serveur à nous le dire.
