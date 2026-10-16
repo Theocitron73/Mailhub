@@ -1,5 +1,7 @@
 'use strict';
 
+const fs = require('fs');
+const path = require('path');
 const { EventEmitter } = require('events');
 const { ImapFlow } = require('imapflow');
 const { simpleParser } = require('mailparser');
@@ -96,6 +98,56 @@ function tlsFor(host) {
   return ['127.0.0.1', 'localhost', '::1'].includes(String(host).toLowerCase())
     ? { rejectUnauthorized: false }
     : undefined;
+}
+
+function normalizeAttachments(attachments = []) {
+  return attachments.map((att) => {
+    if (typeof att === 'string') {
+      try {
+        if (fs.existsSync(att)) return { filename: path.basename(att), path: att };
+      } catch (_) {}
+      return { path: att };
+    }
+    const filename = att.name || (att.path ? path.basename(att.path) : 'piece-jointe');
+    // If a verified path exists on the filesystem
+    if (att.path && typeof att.path === 'string') {
+      try {
+        if (fs.existsSync(att.path)) {
+          return {
+            filename,
+            path: att.path,
+            contentType: att.contentType || undefined,
+          };
+        }
+      } catch (_) {}
+    }
+    // If base64 dataUrl is available (drag & drop, clipboard, or web mode)
+    if (att.dataUrl && typeof att.dataUrl === 'string') {
+      const commaIdx = att.dataUrl.indexOf(',');
+      const meta = commaIdx >= 0 ? att.dataUrl.slice(0, commaIdx) : '';
+      const b64 = commaIdx >= 0 ? att.dataUrl.slice(commaIdx + 1) : att.dataUrl;
+      const mimeMatch = meta.match(/data:([^;]+)/);
+      const contentType = mimeMatch ? mimeMatch[1] : (att.contentType || undefined);
+      return {
+        filename,
+        content: Buffer.from(b64, 'base64'),
+        contentType,
+      };
+    }
+    // If raw content buffer or string is already provided
+    if (att.content) {
+      return {
+        filename,
+        content: att.content,
+        contentType: att.contentType || undefined,
+      };
+    }
+    // If path is specified and not empty, fallback to path
+    if (att.path) {
+      return { filename, path: att.path };
+    }
+    return { filename, content: Buffer.alloc(0) };
+  });
 }
 
 // ------------------------------------------------------------------- gestion
@@ -702,7 +754,7 @@ class ImapManager extends EventEmitter {
       html: mail.html || undefined,
       inReplyTo: mail.inReplyTo || undefined,
       references: mail.references && mail.references.length ? mail.references : undefined,
-      attachments: (mail.attachments || []).map((p) => ({ path: p.path || p })),
+      attachments: normalizeAttachments(mail.attachments),
     };
     // Signature avec images : les images viennent du compte (jamais de l'interface) et sont intégrées au message
     if (mail.signatureId) {
@@ -745,7 +797,7 @@ class ImapManager extends EventEmitter {
       subject: mail.subject || '',
       text: mail.text || '',
       html: mail.html || undefined,
-      attachments: (mail.attachments || []).map((p) => ({ path: p.path || p })),
+      attachments: normalizeAttachments(mail.attachments),
     };
 
     const raw = await new Promise((resolve, reject) =>

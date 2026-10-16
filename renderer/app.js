@@ -363,10 +363,24 @@ function renderSidebar() {
       { label: 'Nouveau dossier', icon: 'plus', onClick: () => openNewFolderDialog(acc.id) },
       { label: 'Tout marquer comme lu', icon: 'mailopen', onClick: async () => {
         try {
+          if (state.folders[acc.id] && state.folders[acc.id].folders) {
+            state.folders[acc.id].folders.forEach((f) => { f.unseen = 0; });
+          }
+          if (state.current.accountId === acc.id) {
+            state.messages.forEach((m) => { m.seen = true; });
+            renderList();
+          } else if (state.current.accountId === 'unified') {
+            state.messages.forEach((m) => { if (m.accountId === acc.id) m.seen = true; });
+            renderList();
+          }
+          renderSidebar();
           await call(api.messages.markAllReadInAccount(acc.id));
           toast('Tous les messages du compte marqués comme lus.');
+          await loadFolders(acc.id);
           renderSidebar();
-          if (state.current.accountId === acc.id) loadMessages({ silent: true });
+          if (state.current.accountId === acc.id || state.current.accountId === 'unified') {
+            loadMessages({ silent: true });
+          }
         } catch (err) { toast(err.message, { error: true }); }
       }},
     ]); } } },
@@ -463,10 +477,22 @@ function openFolderMenu(e, acc, f, special) {
   const items = [
     { label: 'Tout marquer comme lu', icon: 'mailopen', onClick: async () => {
       try {
+        f.unseen = 0;
+        if (state.current.accountId === acc.id && state.current.folder === f.path) {
+          state.messages.forEach((m) => { m.seen = true; });
+          renderList();
+        } else if (state.current.accountId === 'unified' && f.path.toUpperCase() === 'INBOX') {
+          state.messages.forEach((m) => { if (m.accountId === acc.id) m.seen = true; });
+          renderList();
+        }
+        renderSidebar();
         await call(api.messages.markAllRead(acc.id, f.path));
-        await loadFolders(acc.id);
-        if (state.current.accountId === acc.id && state.current.folder === f.path) loadMessages({ silent: true });
         toast('Dossier marqué comme lu.');
+        await loadFolders(acc.id);
+        renderSidebar();
+        if ((state.current.accountId === acc.id && state.current.folder === f.path) || (state.current.accountId === 'unified' && f.path.toUpperCase() === 'INBOX')) {
+          loadMessages({ silent: true });
+        }
       } catch (err) { toast(err.message, { error: true }); }
     }},
     { label: 'Vider le dossier (supprimer tous les messages)', icon: 'trash', danger: true, onClick: async () => {
@@ -739,6 +765,7 @@ function openNewFolderDialog(accountId, parentPath) {
 
 async function selectFolder(accountId, folder) {
   setView('mail');
+  showTab('list');
   state.expanded = false;
   state.current = { accountId, folder };
   state.query = '';
@@ -771,6 +798,7 @@ function setView(view) {
 
 function showPanel(view) {
   setView(view);
+  showTab('list');
   renderSidebar();
   if (view === 'rules') renderRulesPanel();
   else if (view === 'settings') renderSettingsPanel();
@@ -779,6 +807,7 @@ function showPanel(view) {
 
 function showMail() {
   setView('mail');
+  showTab('list');
   renderSidebar();
 }
 
@@ -1167,8 +1196,21 @@ function renderSelectionBar() {
 
 const selectedMessages = () => state.messages.filter((m) => state.sel.has(keyOf(m)));
 
+let lastClickTime = 0;
+let lastClickKey = null;
+
 function onRowClick(e, m) {
   const key = keyOf(m);
+  const now = Date.now();
+  if (e.detail === 2 || (lastClickKey === key && now - lastClickTime < 500)) {
+    lastClickTime = 0;
+    lastClickKey = null;
+    onRowDblClick(m);
+    return;
+  }
+  lastClickTime = now;
+  lastClickKey = key;
+
   if (e.metaKey || e.ctrlKey) {
     if (state.sel.has(key)) state.sel.delete(key); else state.sel.add(key);
     state.anchor = key;
@@ -1938,6 +1980,9 @@ function renderMailInto(reader, o, redraw) {
             b.addEventListener('click', async () => { await toggleFlag(m); b.classList.toggle('star-on', !!m.flagged); b.setAttribute('aria-pressed', String(!!m.flagged)); });
             return b;
           })(),
+          (!reader.closest || !reader.closest('#tabview'))
+            ? h('button', { class: 'icon-btn', title: 'Ouvrir dans un nouvel onglet', 'aria-label': 'Ouvrir dans un nouvel onglet', on: { click: () => openInTab(m) } }, ico('layoutFull'))
+            : null,
           h('button', { class: 'icon-btn', title: 'Répondre', 'aria-label': 'Répondre', on: { click: () => replyTo(o) } }, ico('reply')),
           h('button', { class: 'icon-btn', title: 'Transférer', 'aria-label': 'Transférer', on: { click: () => forward(o) } }, ico('forward')),
           h('button', { class: 'icon-btn', title: 'Marquer comme non lu', 'aria-label': 'Marquer comme non lu', on: { click: () => setSeen([m], false) } }, ico('mailopen')),
@@ -2450,12 +2495,17 @@ function openCompose(init = {}) {
     const dtFiles = e.dataTransfer ? Array.from(e.dataTransfer.files || []) : [];
     if (!dtFiles.length) return;
     for (const f of dtFiles) {
+      let diskPath = '';
+      if (api && api.getPathForFile) {
+        try { diskPath = api.getPathForFile(f); } catch (_) {}
+      }
+      if (!diskPath && f.path) diskPath = f.path;
       const b64 = await new Promise((resolve) => {
         const reader = new FileReader();
         reader.onload = () => resolve(reader.result);
         reader.readAsDataURL(f);
       });
-      files.push({ name: f.name, size: f.size, dataUrl: b64, path: f.name });
+      files.push({ name: f.name, size: f.size, dataUrl: b64, path: diskPath || '' });
     }
     renderAtt();
     toast(`${dtFiles.length} ${plural(dtFiles.length, 'fichier ajouté', 'fichiers ajoutés')} en pièce jointe.`);

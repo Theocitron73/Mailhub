@@ -73,6 +73,7 @@
 
   window.mailhub = {
     platform: isMac ? 'darwin' : 'web',
+    getPathForFile: (f) => (f && f.path) || '',
 
     accounts: {
       list: () => invoke('accounts:list'),
@@ -141,6 +142,10 @@
         return { ok: false, error: 'Aperçu non disponible pour ce fichier.' };
       },
       send: (accountId, mail) => invoke('messages:send', accountId, mail),
+      markAllRead: (accountId, folder) => invoke('messages:markAllRead', accountId, folder),
+      markAllReadInAccount: (accountId) => invoke('messages:markAllReadInAccount', accountId),
+      deleteAllInFolder: (accountId, folder) => invoke('messages:deleteAllInFolder', accountId, folder),
+      saveDraft: (accountId, mail) => invoke('messages:saveDraft', accountId, mail),
       flagged: () => invoke('messages:flagged'),
       pickAttachments: () => {
         return new Promise((resolve) => {
@@ -160,7 +165,7 @@
                 name: f.name,
                 size: f.size,
                 dataUrl: b64,
-                path: f.name,
+                path: f.path || '',
               });
             }
             resolve({ ok: true, data: out });

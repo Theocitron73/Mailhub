@@ -770,6 +770,57 @@ async function handleChannel(channel, args) {
     return { deletedCount };
   }
 
+  if (channel === 'messages:markAllReadInAccount') {
+    const [accountId] = args;
+    const acc = store.getAccount(accountId);
+    if (acc && acc.imap && acc.imap.host !== 'demo' && imapManager) {
+      try {
+        return await imapManager.markAllReadInAccount(accountId);
+      } catch (e) {
+        console.warn('Real IMAP markAllReadInAccount error:', e.message);
+      }
+    }
+    const msgs = demoStore.messages[accountId] || [];
+    msgs.forEach((m) => { m.seen = true; });
+    saveDemoStore();
+    return true;
+  }
+
+  if (channel === 'messages:saveDraft') {
+    const [accountId, mail] = args;
+    const acc = store.getAccount(accountId);
+    if (!acc) throw new Error('Compte introuvable');
+    if (acc.imap && acc.imap.host !== 'demo' && imapManager) {
+      try {
+        return await imapManager.saveDraft(accountId, mail);
+      } catch (e) {
+        console.warn('Real IMAP saveDraft error:', e.message);
+      }
+    }
+    const newUid = ++demoStore.nextUid;
+    const newMsg = {
+      uid: newUid,
+      folder: 'Drafts',
+      subject: mail.subject || '(sans objet)',
+      from: acc.email,
+      fromName: acc.name,
+      to: mail.to || '',
+      cc: mail.cc || '',
+      date: new Date().toISOString(),
+      size: (mail.text || '').length + 500,
+      seen: true,
+      flagged: false,
+      hasAttachment: !!(mail.attachments && mail.attachments.length),
+      html: mail.html || '',
+      text: mail.text || '',
+      attachments: mail.attachments || [],
+    };
+    if (!demoStore.messages[accountId]) demoStore.messages[accountId] = [];
+    demoStore.messages[accountId].unshift(newMsg);
+    saveDemoStore();
+    return { ok: true };
+  }
+
   if (channel === 'messages:flagged') {
     const accounts = store.listAccounts();
     const results = [];
