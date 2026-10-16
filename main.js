@@ -523,9 +523,13 @@ function registerIpc() {
     }
   });
   handle('updates:install', () => {
-    if (autoUpdater) {
-      quitting = true;
-      autoUpdater.quitAndInstall();
+    if (!autoUpdater) throw new Error('Module de mise à jour non disponible');
+    quitting = true;
+    try {
+      autoUpdater.quitAndInstall(false, true);
+    } catch (err) {
+      console.error('Erreur quitAndInstall:', err);
+      throw err;
     }
     return true;
   });
@@ -605,6 +609,7 @@ function initAutoUpdater() {
 
   autoUpdater.on('error', (err) => {
     console.warn('Mise à jour automatique :', err.message);
+    send('app:error', { message: 'Mise à jour : ' + (err.message || String(err)) });
   });
 
   setTimeout(() => {

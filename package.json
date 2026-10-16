@@ -1,6 +1,6 @@
 {
   "name": "mailhub",
-  "version": "1.2.3",
+  "version": "1.2.4",
   "description": "MailHub - messagerie multi-comptes IMAP avec tri automatique",
   "main": "main.js",
   "author": "MailHub",

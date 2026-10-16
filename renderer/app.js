@@ -2739,7 +2739,15 @@ async function renderSettingsPanel() {
           } else if (res.noRelease) {
             toast(res.message || 'Aucune mise à jour publiée pour cette plateforme.');
           } else if (res.update) {
-            toast(`Mise à jour disponible (${res.latest || res.info?.version}) !`);
+            toast(`Mise à jour disponible (${res.latest || res.info?.version}) !`, {
+              timeout: 20000,
+              actions: [
+                {
+                  label: 'Télécharger sur GitHub',
+                  onClick: () => window.open('https://github.com/Theocitron73/Mailhub/releases/latest', '_blank'),
+                },
+              ],
+            });
           } else {
             toast('MailHub est à jour.');
           }
@@ -3345,13 +3353,25 @@ api.on('app:updateAvailable', ({ version }) => {
 });
 
 api.on('app:updateDownloaded', ({ version }) => {
-  toast(`Mise à jour (${version}) prête à être installée !`, {
-    timeout: 30000,
+  toast(`Mise à jour (${version}) téléchargée et prête !`, {
+    timeout: 60000,
     actions: [
       {
         label: 'Redémarrer et mettre à jour',
+        onClick: async () => {
+          try {
+            if (api.updates && api.updates.install) {
+              await call(api.updates.install());
+            }
+          } catch (err) {
+            toast('Impossible d’appliquer automatiquement la mise à jour : ' + err.message, { error: true });
+          }
+        },
+      },
+      {
+        label: 'Télécharger (.dmg / .exe)',
         onClick: () => {
-          if (api.updates && api.updates.install) api.updates.install();
+          window.open('https://github.com/Theocitron73/Mailhub/releases/latest', '_blank');
         },
       },
     ],
