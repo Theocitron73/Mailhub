@@ -22,6 +22,7 @@ jobs:
             files: |
               dist/*.dmg
               dist/*.zip
+              dist/latest-mac.yml
     runs-on: ${{ matrix.os }}
     steps:
       - uses: actions/checkout@v4

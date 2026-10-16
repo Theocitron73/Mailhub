@@ -516,6 +516,9 @@ function registerIpc() {
       const res = await autoUpdater.checkForUpdates();
       return { update: !!res && !!res.updateInfo, version: app.getVersion(), latest: res?.updateInfo?.version, info: res && res.updateInfo };
     } catch (err) {
+      if (err.message && (err.message.includes('404') || err.message.includes('latest-mac.yml') || err.message.includes('latest.yml'))) {
+        return { update: false, version: app.getVersion(), noRelease: true, message: 'Aucune mise à jour publiée pour cette version/plateforme.' };
+      }
       throw new Error('Impossible de vérifier les mises à jour : ' + err.message);
     }
   });

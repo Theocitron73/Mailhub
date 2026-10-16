@@ -2736,6 +2736,8 @@ async function renderSettingsPanel() {
           const res = await call(api.updates.check());
           if (res.dev) {
             toast('Mode développement : les mises à jour automatiques sont désactivées.');
+          } else if (res.noRelease) {
+            toast(res.message || 'Aucune mise à jour publiée pour cette plateforme.');
           } else if (res.update) {
             toast(`Mise à jour disponible (${res.latest || res.info?.version}) !`);
           } else {
