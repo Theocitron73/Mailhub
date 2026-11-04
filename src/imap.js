@@ -400,12 +400,18 @@ class ImapManager extends EventEmitter {
       return {
         uid,
         messageId: parsed.messageId || '',
-        references: parsed.references || [],
+        references: [].concat(parsed.references || []),
+        inReplyTo: parsed.inReplyTo || '',
         subject: parsed.subject || '(sans objet)',
         from: addrList(parsed.from)[0] || { name: '', address: '' },
         to: addrList(parsed.to),
         cc: addrList(parsed.cc),
+        bcc: addrList(parsed.bcc),
         replyTo: addrList(parsed.replyTo)[0] || null,
+        replyToAll: addrList(parsed.replyTo),
+        draft: flags.has('\\Draft'),
+        answered: flags.has('\\Answered'),
+        signatureId: String((parsed.headers && parsed.headers.get('x-mailhub-signature')) || ''),
         date: isoDate(parsed.date),
         html,
         text: parsed.text || '',
@@ -432,7 +438,7 @@ class ImapManager extends EventEmitter {
   }
 
   async setFlag(accountId, folder, uids, flag, on) {
-    const imapFlag = flag === 'seen' ? '\\Seen' : '\\Flagged';
+    const imapFlag = { seen: '\\Seen', answered: '\\Answered' }[flag] || '\\Flagged';
     return this.withMailbox(accountId, folder, async (client) => {
       const range = uids.join(',');
       const res = on
@@ -754,7 +760,7 @@ class ImapManager extends EventEmitter {
       html: mail.html || undefined,
       inReplyTo: mail.inReplyTo || undefined,
       references: mail.references && mail.references.length ? mail.references : undefined,
-      attachments: normalizeAttachments(mail.attachments),
+      attachments: [...normalizeAttachments(mail.attachments), ...(await this._sourceAttachments(mail.sourceAttachments))],
     };
     // Signature avec images : les images viennent du compte (jamais de l'interface) et sont intégrées au message
     if (mail.signatureId) {
@@ -782,33 +788,114 @@ class ImapManager extends EventEmitter {
         console.error('Copie dans Envoyés impossible :', err.message);
       }
     }
+    // Le message repris d'un brouillon est parti : on retire le brouillon
+    if (mail.draftId) {
+      try { await this.discardDraft(accountId, mail.draftId); } catch (err) { console.error('Suppression du brouillon impossible :', err.message); }
+    }
     return { ok: true };
   }
 
+  // Pièces jointes reprises d'un message existant (transfert, brouillon rouvert) :
+  // elles sont relues sur le serveur, l'interface ne transmet que leurs numéros.
+  async _sourceAttachments(src) {
+    if (!src || !src.accountId || !src.folder || !src.uid || !Array.isArray(src.indexes) || !src.indexes.length) return [];
+    const wanted = new Set(src.indexes.map(Number));
+    return this.withMailbox(src.accountId, src.folder, async (client) => {
+      const { parsed } = await this._fetchParsed(client, src.uid);
+      return (parsed.attachments || [])
+        .map((a, index) => ({ a, index }))
+        .filter(({ index }) => wanted.has(index))
+        .map(({ a, index }) => ({
+          filename: a.filename || `piece-jointe-${index + 1}`,
+          content: a.content,
+          contentType: a.contentType || undefined,
+        }));
+    }, { readOnly: true });
+  }
+
+  async _draftsFolder(accountId) {
+    const client = await this._ops(accountId);
+    return this._findSpecial(client, '\\Drafts', /^(drafts|brouillons)/i);
+  }
+
+  // Numéros des brouillons portant cet identifiant (Message-ID)
+  async _draftUids(accountId, drafts, draftId) {
+    if (!draftId) return [];
+    return this.withMailbox(accountId, drafts, async (client) => {
+      const found = await client.search({ header: { 'message-id': draftId } }, { uid: true });
+      return found || [];
+    });
+  }
+
+  // Supprime définitivement un brouillon (après envoi, ou « Supprimer » à la fermeture)
+  async discardDraft(accountId, draftId) {
+    const drafts = await this._draftsFolder(accountId);
+    if (!drafts || !draftId) return { deleted: 0 };
+    const uids = await this._draftUids(accountId, drafts, draftId);
+    if (!uids.length) return { deleted: 0 };
+    await this.withMailbox(accountId, drafts, (client) => client.messageDelete(uids.join(','), { uid: true }));
+    this.emit('changed', { accountId, folder: drafts });
+    return { deleted: uids.length };
+  }
+
+  // Enregistre (ou remplace) un brouillon. Un brouillon est reconnu par son Message-ID (draftId) :
+  // la nouvelle version est ajoutée d'abord, puis les anciennes sont supprimées, pour ne jamais rien perdre.
   async saveDraft(accountId, mail) {
     const acc = this.store.getAccount(accountId);
     if (!acc) throw new Error('Compte introuvable');
-    
+    const draftId = /^<[^<>\s]+@[^<>\s]+>$/.test(String(mail.draftId || ''))
+      ? mail.draftId
+      : `<${Date.now().toString(36)}.${Math.random().toString(36).slice(2, 10)}@${domainOf(acc.email) || 'mailhub.local'}>`;
+
     const message = {
       from: { name: acc.name, address: acc.email },
-      to: mail.to,
+      to: mail.to || undefined,
       cc: mail.cc || undefined,
       bcc: mail.bcc || undefined,
       subject: mail.subject || '',
       text: mail.text || '',
       html: mail.html || undefined,
-      attachments: normalizeAttachments(mail.attachments),
+      messageId: draftId,
+      inReplyTo: mail.inReplyTo || undefined,
+      references: mail.references && mail.references.length ? mail.references : undefined,
+      headers: mail.signatureId ? { 'X-MailHub-Signature': String(mail.signatureId).slice(0, 64) } : undefined,
+      attachments: [...normalizeAttachments(mail.attachments), ...(await this._sourceAttachments(mail.sourceAttachments))],
     };
 
     const raw = await new Promise((resolve, reject) =>
       new MailComposer(message).compile().build((e, b) => (e ? reject(e) : resolve(b)))
     );
-    
-    const client = await this._ops(accountId);
-    const drafts = await this._findSpecial(client, '\\Drafts', /^(drafts|brouillons)/i);
+
+    const drafts = await this._draftsFolder(accountId);
     if (!drafts) throw new Error('Dossier brouillons introuvable.');
-    await client.append(drafts, raw);
-    return { ok: true };
+    let previous = [];
+    try { previous = await this._draftUids(accountId, drafts, mail.draftId); } catch (_) { previous = []; }
+    const client = await this._ops(accountId);
+    const appended = await client.append(drafts, raw, ['\\Draft', '\\Seen']);
+    // numéro de la nouvelle version : réponse du serveur (UIDPLUS) ou recherche par Message-ID
+    let uid = (appended && appended.uid) || null;
+    if (!uid) {
+      try {
+        const now = await this._draftUids(accountId, drafts, draftId);
+        const fresh = now.filter((u) => !previous.includes(u));
+        if (fresh.length) uid = Math.max(...fresh);
+      } catch (_) { uid = null; }
+    }
+    // On ne retire l'ancienne version que si la nouvelle est bien identifiée
+    const stale = previous.filter((u) => u !== uid);
+    if (uid && stale.length) {
+      try {
+        await this.withMailbox(accountId, drafts, (c) => c.messageDelete(stale.join(','), { uid: true }));
+      } catch (err) { console.error('Ancienne version du brouillon non supprimée :', err.message); }
+    }
+    this.emit('changed', { accountId, folder: drafts });
+    // Pièces jointes du brouillon enregistré, dans l'ordre du message (fichiers locaux puis repris)
+    const attachments = message.attachments.map((att, index) => ({
+      index,
+      filename: att.filename || `piece-jointe-${index + 1}`,
+      size: att.content ? att.content.length : (att.path ? (() => { try { return fs.statSync(att.path).size; } catch (_) { return 0; } })() : 0),
+    }));
+    return { ok: true, draftId, folder: drafts, uid, replaceable: !!uid, attachments };
   }
 }
 

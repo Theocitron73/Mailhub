@@ -646,3 +646,20 @@ body.mac #tabbar { padding-top: 8px; }
   --shadow: 0 12px 40px rgba(0, 0, 0, 0.65);
   color-scheme: dark;
 }
+
+/* ---- liens des messages, réponses, brouillons */
+.link-tip {
+  position: fixed; left: 12px; bottom: 10px; z-index: 50; max-width: min(70vw, 720px);
+  padding: 4px 10px; border-radius: 6px; border: 1px solid var(--line);
+  background: var(--surface); color: var(--ink-2); font-size: 12px;
+  white-space: nowrap; overflow: hidden; text-overflow: ellipsis; pointer-events: none;
+  box-shadow: 0 2px 8px rgba(0, 0, 0, .12);
+}
+.link-tip[hidden] { display: none; }
+.draft-banner button { display: inline-flex; align-items: center; gap: 6px; }
+.draft-status { color: var(--ink-2); font-size: 12px; margin-right: 4px; }
+.compose-grid .row-line[hidden] { display: none; }
+.compose-grid .row-line.with-extra { grid-template-columns: 76px 1fr auto; }
+.link-btn { background: none; border: 0; padding: 2px 6px; color: var(--accent); font-size: 13px; cursor: pointer; }
+.link-btn:hover { text-decoration: underline; }
+.link-btn[hidden] { display: none; }

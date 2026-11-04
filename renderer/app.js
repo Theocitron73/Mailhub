@@ -228,7 +228,10 @@ function toast(message, opts = {}) {
 
 // ------------------------------------------------------------ fenêtres modales
 
-function openDialog({ title, subtitle, body, buttons, large, onClose }) {
+// Pile des fenêtres ouvertes : Échap ne ferme que celle du dessus.
+const dialogStack = [];
+
+function openDialog({ title, subtitle, body, buttons, large, onClose, onRequestClose }) {
   const root = $('#modal-root');
   const previousFocus = document.activeElement;
   const overlay = h('div', { class: 'overlay' });
@@ -246,6 +249,8 @@ function openDialog({ title, subtitle, body, buttons, large, onClose }) {
     close() {
       if (overlay.parentNode) overlay.parentNode.removeChild(overlay);
       document.removeEventListener('keydown', onKey, true);
+      const at = dialogStack.indexOf(api2);
+      if (at >= 0) dialogStack.splice(at, 1);
       if (previousFocus && previousFocus.focus) previousFocus.focus();
       if (onClose) onClose();
     },
@@ -258,11 +263,18 @@ function openDialog({ title, subtitle, body, buttons, large, onClose }) {
     foot.appendChild(btn);
   });
 
+  // Échap ou clic à côté : une fenêtre qui contient un travail en cours (rédaction) peut demander confirmation
+  const requestClose = () => (onRequestClose ? onRequestClose(api2) : api2.close());
+  api2.requestClose = requestClose;
   function onKey(e) {
-    if (e.key === 'Escape') { e.stopPropagation(); api2.close(); }
+    if (e.key !== 'Escape' || dialogStack[dialogStack.length - 1] !== api2) return;
+    e.stopPropagation();
+    e.preventDefault();
+    requestClose();
   }
   document.addEventListener('keydown', onKey, true);
-  overlay.addEventListener('mousedown', (e) => { if (e.target === overlay) api2.close(); });
+  overlay.addEventListener('mousedown', (e) => { if (e.target === overlay) requestClose(); });
+  dialogStack.push(api2);
   root.appendChild(overlay);
   const first = dialog.querySelector('input:not([type=checkbox]):not([type=radio]), textarea, select');
   (first || dialog.querySelector('button')).focus();
@@ -1238,6 +1250,8 @@ function onRowClick(e, m) {
 // Double-clic (ou Entrée, clic molette) : le message s'ouvre dans un onglet, quelle que soit la disposition
 function onRowDblClick(m) {
   selectOnly(m);
+  // un brouillon se rouvre directement dans la rédaction
+  if (isDraftsFolder(m.accountId, m.folder)) { renderList(); resumeDraft(m); return; }
   renderList();
   openInTab(m);
 }
@@ -1293,38 +1307,27 @@ function onRowContextMenu(e, m) {
       },
     },
     { separator: true },
-    ...(!isMultiple ? [
-      {
-        label: 'Répondre',
-        icon: 'reply',
-        shortcut: 'R',
-        onClick: async () => {
-          try {
-            const detail = (state.opened && keyOf(state.opened.msg) === key && state.opened.detail)
-              ? state.opened.detail
-              : await call(api.messages.get(m.accountId, m.folder, m.uid));
-            replyTo({ msg: m, detail });
-          } catch (err) {
-            toast(err.message, { error: true });
-          }
-        },
-      },
-      {
-        label: 'Transférer',
-        icon: 'forward',
-        onClick: async () => {
-          try {
-            const detail = (state.opened && keyOf(state.opened.msg) === key && state.opened.detail)
-              ? state.opened.detail
-              : await call(api.messages.get(m.accountId, m.folder, m.uid));
-            forward({ msg: m, detail });
-          } catch (err) {
-            toast(err.message, { error: true });
-          }
-        },
-      },
-      { separator: true },
-    ] : []),
+    ...(!isMultiple ? (() => {
+      const withDetail = (fn) => async () => {
+        try {
+          const detail = (state.opened && keyOf(state.opened.msg) === key && state.opened.detail)
+            ? state.opened.detail
+            : await call(api.messages.get(m.accountId, m.folder, m.uid));
+          fn({ msg: m, detail });
+        } catch (err) {
+          toast(err.message, { error: true });
+        }
+      };
+      return [
+        ...(isDraftsFolder(m.accountId, m.folder)
+          ? [{ label: 'Continuer l’écriture', icon: 'pencil', shortcut: 'Entrée', onClick: withDetail((o) => resumeDraft(o.msg, o.detail)) }]
+          : []),
+        { label: 'Répondre', icon: 'reply', shortcut: 'R', onClick: withDetail((o) => replyTo(o)) },
+        { label: 'Répondre à tous', icon: 'replyAll', shortcut: 'A', onClick: withDetail((o) => replyAll(o)) },
+        { label: 'Transférer', icon: 'forward', shortcut: 'F', onClick: withDetail((o) => forward(o)) },
+        { separator: true },
+      ];
+    })() : []),
     {
       label: 'Ranger dans un dossier…',
       icon: 'folder',
@@ -1903,12 +1906,28 @@ function hasRemoteContent(html) {
   return !!html && /(?:src|background|poster)\s*=\s*["']?\s*https?:|url\(\s*["']?\s*https?:|@import/i.test(html);
 }
 
+// Texte brut : les adresses web et e-mail deviennent cliquables
+function linkifyText(text) {
+  const re = /\b(https?:\/\/[^\s<>"']+[^\s<>"'.,;:!?)\]}]|www\.[^\s<>"']+[^\s<>"'.,;:!?)\]}]|[\w.+-]+@[\w-]+(?:\.[\w-]+)+)/gi;
+  let out = '';
+  let last = 0;
+  String(text || '').replace(re, (m, _g, at) => {
+    out += esc(text.slice(last, at));
+    const href = /@/.test(m) && !/^(https?:|www\.)/i.test(m) ? 'mailto:' + m : (/^www\./i.test(m) ? 'https://' + m : m);
+    out += `<a href="${esc(href)}">${esc(m)}</a>`;
+    last = at + m.length;
+    return m;
+  });
+  return out + esc(String(text || '').slice(last));
+}
+
 function buildMailDoc(detail, allowRemote) {
   const csp = `default-src 'none'; img-src data: ${allowRemote ? 'https: http:' : ''}; style-src 'unsafe-inline'; font-src data:`;
+  // <base> est retiré : le CSP de la fenêtre (base-uri 'none') l'ignorerait de toute façon, et les liens sont gérés par wireMailLinks
   const safeHtml = detail.html ? detail.html.replace(/<\s*(?:meta|base|link)\b[^>]*>/gi, '') : '';
-  const body = detail.html ? safeHtml : `<pre style="white-space:pre-wrap;font:inherit;margin:0">${esc(detail.text || '')}</pre>`;
+  const body = detail.html ? safeHtml : `<pre style="white-space:pre-wrap;font:inherit;margin:0">${linkifyText(detail.text || '')}</pre>`;
   return '<!doctype html><html><head><meta charset="utf-8">' +
-    `<meta http-equiv="Content-Security-Policy" content="${csp}"><base target="_blank">` +
+    `<meta http-equiv="Content-Security-Policy" content="${csp}">` +
     '<style>html{color-scheme:light}body{margin:0;padding:20px 28px 36px;font:14px/1.55 system-ui,-apple-system,"Segoe UI",sans-serif;color:#1a1a1a;background:#fff;overflow-wrap:anywhere}' +
     'img{max-width:100%;height:auto}table{max-width:100%}blockquote{margin:8px 0;padding-left:12px;border-left:3px solid #d0d7de;color:#555}a{color:#1a56c4}</style>' +
     `</head><body>${body}</body></html>`;
@@ -1983,11 +2002,18 @@ function renderMailInto(reader, o, redraw) {
           (!reader.closest || !reader.closest('#tabview'))
             ? h('button', { class: 'icon-btn', title: 'Ouvrir dans un nouvel onglet', 'aria-label': 'Ouvrir dans un nouvel onglet', on: { click: () => openInTab(m) } }, ico('layoutFull'))
             : null,
-          h('button', { class: 'icon-btn', title: 'Répondre', 'aria-label': 'Répondre', on: { click: () => replyTo(o) } }, ico('reply')),
-          h('button', { class: 'icon-btn', title: 'Transférer', 'aria-label': 'Transférer', on: { click: () => forward(o) } }, ico('forward')),
+          isDraft(m, d) ? h('button', { class: 'icon-btn', title: 'Continuer l’écriture', 'aria-label': 'Continuer l’écriture', on: { click: () => resumeDraft(m, d) } }, ico('pencil')) : null,
+          h('button', { class: 'icon-btn', title: 'Répondre (R)', 'aria-label': 'Répondre', on: { click: () => replyTo(o) } }, ico('reply')),
+          canReplyAll(d) ? h('button', { class: 'icon-btn', title: 'Répondre à tous (A)', 'aria-label': 'Répondre à tous', on: { click: () => replyAll(o) } }, ico('replyAll')) : null,
+          h('button', { class: 'icon-btn', title: 'Transférer (F)', 'aria-label': 'Transférer', on: { click: () => forward(o) } }, ico('forward')),
           h('button', { class: 'icon-btn', title: 'Marquer comme non lu', 'aria-label': 'Marquer comme non lu', on: { click: () => setSeen([m], false) } }, ico('mailopen')),
           h('button', { class: 'icon-btn', title: 'Supprimer', 'aria-label': 'Supprimer', on: { click: () => deleteMessages([m]) } }, ico('trash'))),
         h('div', { class: 'reader-date' }, dfFull.format(new Date(d.date)))))));
+
+  if (isDraft(m, d)) {
+    reader.appendChild(h('div', { class: 'remote-banner draft-banner' }, h('span', null, 'Ce message est un brouillon : il n’a pas encore été envoyé.'),
+      h('button', { class: 'primary', on: { click: () => resumeDraft(m, d) } }, ico('pencil', 15), 'Continuer l’écriture')));
+  }
 
   if (d.attachments.length) {
     reader.appendChild(h('div', { class: 'attachments' }, d.attachments.map((a) =>
@@ -2011,9 +2037,75 @@ function renderMailInto(reader, o, redraw) {
       h('button', { class: 'ghost', on: { click: () => { o.allowRemote = true; redraw(); } } }, 'Afficher les images')));
   }
 
-  const frame = h('iframe', { class: 'mail-frame', sandbox: 'allow-popups', title: 'Contenu du message', referrerpolicy: 'no-referrer' });
+  // allow-same-origin SANS allow-scripts : aucun script du message ne peut s'exécuter,
+  // mais l'interface peut intercepter les clics sur les liens (sinon ils ne faisaient rien).
+  const frame = h('iframe', { class: 'mail-frame', sandbox: 'allow-same-origin allow-popups', title: 'Contenu du message', referrerpolicy: 'no-referrer' });
+  const linkTip = h('div', { class: 'link-tip', hidden: true });
+  frame.addEventListener('load', () => wireMailLinks(frame, linkTip, m));
   frame.srcdoc = buildMailDoc(d, o.allowRemote);
   reader.appendChild(frame);
+  reader.appendChild(linkTip);
+}
+
+// Adresse « mailto: » -> champs de la rédaction
+function parseMailto(href) {
+  try {
+    const u = new URL(href);
+    const p = u.searchParams;
+    const dec = (v) => { try { return decodeURIComponent(v); } catch (_) { return v; } };
+    const to = [dec(u.pathname), p.get('to')].filter(Boolean).join(', ');
+    return { to, cc: p.get('cc') || '', subject: p.get('subject') || '', body: p.get('body') || '' };
+  } catch (_) {
+    return { to: String(href).replace(/^mailto:/i, '').split('?')[0] };
+  }
+}
+
+function openLink(href, m) {
+  if (/^mailto:/i.test(href)) {
+    const mt = parseMailto(href);
+    openCompose({ accountId: m && m.accountId, to: mt.to, cc: mt.cc, subject: mt.subject, body: mt.body });
+    return;
+  }
+  if (!/^https?:/i.test(href)) { toast('Ce lien ne peut pas être ouvert.', { error: true }); return; }
+  call(api.app.openExternal(href)).catch((err) => toast(err.message, { error: true }));
+}
+
+// Clics sur les liens du message : navigateur par défaut, rédaction pour « mailto: », défilement pour les ancres.
+function wireMailLinks(frame, tip, m) {
+  let doc;
+  try { doc = frame.contentDocument; } catch (_) { return; }
+  if (!doc) return;
+  const linkOf = (e) => {
+    const t = e.target && (e.target.nodeType === 1 ? e.target : e.target.parentElement);
+    return t && t.closest ? t.closest('a[href], area[href]') : null;
+  };
+  const activate = (e) => {
+    const a = linkOf(e);
+    if (!a) return;
+    e.preventDefault();
+    const raw = a.getAttribute('href') || '';
+    if (raw.startsWith('#')) {
+      const id = decodeURIComponent(raw.slice(1));
+      const target = id && (doc.getElementById(id) || doc.getElementsByName(id)[0]);
+      if (target) target.scrollIntoView({ block: 'start' });
+      return;
+    }
+    openLink(a.href || raw, m);
+  };
+  doc.addEventListener('click', (e) => { if (e.button === 0) activate(e); });
+  doc.addEventListener('auxclick', (e) => { if (e.button === 1) activate(e); });
+  // les formulaires d'un e-mail ne sont jamais envoyés depuis MailHub
+  doc.addEventListener('submit', (e) => e.preventDefault(), true);
+  // Survol : l'adresse réelle du lien s'affiche en bas (repérer un lien trompeur)
+  doc.addEventListener('mouseover', (e) => {
+    const a = linkOf(e);
+    if (!a) { tip.hidden = true; return; }
+    const href = a.href || a.getAttribute('href') || '';
+    if (!href || href.startsWith('about:')) { tip.hidden = true; return; }
+    tip.textContent = href.replace(/^mailto:/i, 'Écrire à ');
+    tip.hidden = false;
+  });
+  doc.addEventListener('mouseleave', () => { tip.hidden = true; });
 }
 
 async function saveAttachment(m, a) {
@@ -2033,26 +2125,132 @@ function quoteText(d) {
   return '\n\n' + head + '\n\n' + original;
 }
 
-function replyTo(o) {
+function addrLabel(a) {
+  if (!a || !a.address) return '';
+  const name = String(a.name || '').replace(/["<>,;]/g, ' ').replace(/\s+/g, ' ').trim();
+  return name && name.toLowerCase() !== a.address.toLowerCase() ? `"${name}" <${a.address}>` : a.address;
+}
+const ownAddresses = () => new Set(state.accounts.map((a) => String(a.email || '').toLowerCase()).filter(Boolean));
+
+// Destinataires d'une réponse. Répondre : l'auteur (ou son Reply-To). Répondre à tous : + les autres destinataires.
+// Sur un message que l'on a soi-même envoyé, on répond à ses destinataires (et non à soi-même).
+function replyRecipients(d, all) {
+  const own = ownAddresses();
+  const lower = (a) => String((a && a.address) || '').toLowerCase();
+  const mine = own.has(lower(d.from));
+  const author = (d.replyToAll && d.replyToAll.length) ? d.replyToAll : [d.replyTo || d.from];
+  let to = mine ? d.to.slice() : author.slice();
+  let cc = [];
+  if (all) {
+    if (!mine) to = to.concat(d.to || []);
+    cc = (d.cc || []).slice();
+  }
+  const seen = new Set();
+  const pick = (list) => list.filter((a) => {
+    const k = lower(a);
+    if (!k || seen.has(k) || own.has(k)) return false;
+    seen.add(k);
+    return true;
+  });
+  to = pick(to);
+  cc = pick(cc);
+  // message que l'on s'est envoyé à soi-même : on garde l'auteur
+  if (!to.length && d.from && d.from.address) to = [d.from];
+  return { to: to.map(addrLabel).join(', '), cc: cc.map(addrLabel).join(', ') };
+}
+
+const replySubject = (s) => (/^\s*(re|réf|ref|aw|sv)\s*:/i.test(s || '') ? s : 'Re: ' + (s || ''));
+
+function replyTo(o, { all = false } = {}) {
   const d = o.detail;
-  const target = d.replyTo || d.from;
+  if (!d) return;
+  const { to, cc } = replyRecipients(d, all);
   openCompose({
+    kind: all ? 'replyAll' : 'reply',
     accountId: o.msg.accountId,
-    to: target.address,
-    subject: /^(re|réf)\s*:/i.test(d.subject) ? d.subject : 'Re: ' + d.subject,
+    to,
+    cc,
+    subject: replySubject(d.subject === '(sans objet)' ? '' : d.subject),
     body: quoteText(d),
     inReplyTo: d.messageId,
     references: [...(d.references || []), d.messageId].filter(Boolean),
+    replyOf: { accountId: o.msg.accountId, folder: o.msg.folder, uid: o.msg.uid },
   });
+}
+const replyAll = (o) => replyTo(o, { all: true });
+
+// Le message a-t-il plusieurs destinataires (« Répondre à tous » utile) ?
+function canReplyAll(d) {
+  if (!d) return false;
+  const r = replyRecipients(d, true);
+  return (r.to.split(',').filter((x) => x.trim()).length + r.cc.split(',').filter((x) => x.trim()).length) > 1;
 }
 
 function forward(o) {
   const d = o.detail;
-  const head = `\n\n---------- Message transféré ----------\nDe : ${d.from.name ? d.from.name + ' <' + d.from.address + '>' : d.from.address}\nDate : ${dfFull.format(new Date(d.date))}\nObjet : ${d.subject}\n\n`;
+  const fmt = (list) => (list || []).map(addrLabel).join(', ');
+  const head = `\n\n---------- Message transféré ----------\nDe : ${addrLabel(d.from)}\nDate : ${dfFull.format(new Date(d.date))}\nObjet : ${d.subject}\nÀ : ${fmt(d.to)}${d.cc && d.cc.length ? '\nCc : ' + fmt(d.cc) : ''}\n\n`;
   openCompose({
+    kind: 'forward',
     accountId: o.msg.accountId,
-    subject: /^(tr|fwd?)\s*:/i.test(d.subject) ? d.subject : 'Tr: ' + d.subject,
+    subject: /^\s*(tr|fwd?)\s*:/i.test(d.subject) ? d.subject : 'Tr: ' + d.subject,
     body: head + (d.text || ''),
+    // les pièces jointes d'origine sont reprises (relues sur le serveur à l'envoi)
+    sourceMsg: { accountId: o.msg.accountId, folder: o.msg.folder, uid: o.msg.uid },
+    sourceList: d.attachments || [],
+  });
+}
+
+// ---- brouillons
+function isDraftsFolder(accountId, path) {
+  const f = folderInfo(accountId, path);
+  if (!f) return /^(drafts|brouillons)$/i.test(String(path || '').split(/[/.]/).pop());
+  return f.specialUse === '\\Drafts' || /^(drafts|brouillons)$/i.test(f.name || '');
+}
+const isDraft = (m, d) => !!(m && (isDraftsFolder(m.accountId, m.folder) || (d && d.draft)));
+
+// HTML d'un brouillon remis dans l'éditeur : on ne garde que la mise en forme (ni script, ni formulaire, ni cadre).
+function sanitizeHtml(html) {
+  const doc = new DOMParser().parseFromString(String(html || ''), 'text/html');
+  const DROP = new Set(['SCRIPT', 'STYLE', 'IFRAME', 'FRAME', 'FRAMESET', 'OBJECT', 'EMBED', 'APPLET', 'FORM', 'INPUT', 'BUTTON', 'SELECT', 'TEXTAREA', 'LINK', 'META', 'BASE', 'TITLE', 'SVG', 'MATH', 'TEMPLATE', 'NOSCRIPT', 'VIDEO', 'AUDIO', 'SOURCE', 'TRACK']);
+  const walk = (node) => {
+    [...node.children].forEach((el) => {
+      if (DROP.has(el.tagName.toUpperCase())) { el.remove(); return; }
+      [...el.attributes].forEach((at) => {
+        const n = at.name.toLowerCase();
+        const v = at.value.trim();
+        if (n.startsWith('on') || n === 'srcdoc' || n === 'formaction') el.removeAttribute(at.name);
+        else if ((n === 'href' || n === 'src' || n === 'xlink:href' || n === 'action' || n === 'background') && !/^(https?:|mailto:|data:image\/|cid:|#)/i.test(v)) el.removeAttribute(at.name);
+      });
+      walk(el);
+    });
+  };
+  walk(doc.body);
+  return doc.body.innerHTML;
+}
+
+// Rouvre un brouillon dans la fenêtre de rédaction
+async function resumeDraft(m, detail) {
+  let d = detail;
+  try {
+    if (!d) d = await call(api.messages.get(m.accountId, m.folder, m.uid));
+  } catch (err) { toast(err.message, { error: true }); return; }
+  const fmt = (list) => (list || []).map(addrLabel).filter(Boolean).join(', ');
+  openCompose({
+    kind: 'draft',
+    accountId: m.accountId,
+    to: fmt(d.to),
+    cc: fmt(d.cc),
+    bcc: fmt(d.bcc),
+    subject: d.subject === '(sans objet)' ? '' : d.subject,
+    bodyHtml: d.html ? sanitizeHtml(d.html) : null,
+    body: d.html ? '' : (d.text || ''),
+    inReplyTo: d.inReplyTo || undefined,
+    references: d.references || [],
+    draftId: d.messageId || null,
+    signatureId: d.signatureId || '',
+    sourceMsg: { accountId: m.accountId, folder: m.folder, uid: m.uid },
+    sourceList: d.attachments || [],
   });
 }
 
@@ -2133,7 +2331,20 @@ function openCompose(init = {}) {
   from.value = defaultAcc;
   const to = h('input', { type: 'text', value: init.to || '', placeholder: 'destinataire@exemple.com', spellcheck: 'false', autocomplete: 'off' });
   const cc = h('input', { type: 'text', value: init.cc || '', spellcheck: 'false', autocomplete: 'off' });
+  const bcc = h('input', { type: 'text', value: init.bcc || '', spellcheck: 'false', autocomplete: 'off', placeholder: 'Copie cachée (facultatif)' });
   const subject = h('input', { type: 'text', value: init.subject || '' });
+  const bccRow = h('div', { class: 'row-line', hidden: !init.bcc }, h('label', null, 'Cci'), bcc);
+  const bccToggle = h('button', { type: 'button', class: 'link-btn', hidden: !!init.bcc, title: 'Ajouter des destinataires en copie cachée',
+    on: { click: () => { bccRow.hidden = false; bccToggle.hidden = true; bcc.focus(); } } }, 'Cci');
+
+  // État du brouillon : identifiant (Message-ID), compte où il est rangé, modifications non enregistrées
+  let draftId = init.draftId || null;
+  let draftAccount = init.draftId ? init.accountId : null;
+  let draftReplaceable = !!init.draftId;
+  let dirty = false;
+  let closed = false;
+  let saving = null;
+  const markDirty = () => { dirty = true; };
 
   // Éditeur riche (contenteditable)
   const editor = h('div', {
@@ -2356,7 +2567,8 @@ function openCompose(init = {}) {
       const initialHtml = init.bodyHtml
         ? init.bodyHtml
         : (init.body ? esc(init.body).replace(/\n/g, '<br>') : '');
-      const sigHtml = next ? '<div class="sig-block" data-sig="1"><br><br>' + esc(next).replace(/\n/g, '<br>') + '</div>' : '';
+      // Un brouillon rouvert contient déjà sa signature : on ne la rajoute pas
+      const sigHtml = next && init.kind !== 'draft' ? '<div class="sig-block" data-sig="1"><br><br>' + esc(next).replace(/\n/g, '<br>') + '</div>' : '';
       editor.innerHTML = initialHtml + sigHtml;
       currentBlock = next;
       return;
@@ -2379,85 +2591,172 @@ function openCompose(init = {}) {
     sigImgs.appendChild(h('small', null, `${imgs.length} ${plural(imgs.length, 'image', 'images')} de signature, ajoutée${imgs.length > 1 ? 's' : ''} sous la signature à l’envoi :`));
     imgs.forEach((im) => sigImgs.appendChild(h('img', { src: im.dataUrl, alt: im.name, title: im.name })));
   };
-  fillSigSelect((accountById(from.value) || {}).defaultSignature);
+  fillSigSelect(init.kind === 'draft' ? init.signatureId : (accountById(from.value) || {}).defaultSignature);
   applySig(true);
   drawSigImgs();
-  sigSel.addEventListener('change', () => { applySig(false); drawSigImgs(); });
-  from.addEventListener('change', () => { fillSigSelect((accountById(from.value) || {}).defaultSignature); applySig(false); drawSigImgs(); });
+  sigSel.addEventListener('change', () => { applySig(false); drawSigImgs(); markDirty(); });
+  from.addEventListener('change', () => { fillSigSelect((accountById(from.value) || {}).defaultSignature); applySig(false); drawSigImgs(); markDirty(); });
 
+  // Pièces jointes : fichiers de l'ordinateur (files) et pièces reprises d'un message existant (srcAtts :
+  // transfert ou brouillon rouvert), relues sur le serveur au moment de l'envoi.
   let files = [];
+  let srcMsg = init.sourceMsg || null;
+  let srcAtts = srcMsg ? (init.sourceList || []).map((a) => ({ index: a.index, filename: a.filename, size: a.size })) : [];
   const attBox = h('div', { class: 'att-list' });
+  const chip = (name, size, onRemove) => h('span', { class: 'att-chip' }, ico('clip', 15), name, h('span', { class: 'size' }, fmtSize(size)),
+    h('button', { class: 'icon-btn', style: 'width:22px;height:22px', 'aria-label': 'Retirer ' + name, on: { click: () => { onRemove(); markDirty(); renderAtt(); } } }, ico('close', 14)));
   const renderAtt = () => {
     clear(attBox);
-    files.forEach((f, i) => attBox.appendChild(h('span', { class: 'att-chip' }, ico('clip', 15), f.name, h('span', { class: 'size' }, fmtSize(f.size)),
-      h('button', { class: 'icon-btn', style: 'width:22px;height:22px', 'aria-label': 'Retirer', on: { click: () => { files.splice(i, 1); renderAtt(); } } }, ico('close', 14)))));
+    srcAtts.forEach((a, i) => attBox.appendChild(chip(a.filename, a.size, () => srcAtts.splice(i, 1))));
+    files.forEach((f, i) => attBox.appendChild(chip(f.name, f.size, () => files.splice(i, 1))));
+  };
+  renderAtt();
+
+  const payload = () => ({
+    to: to.value.trim(), cc: cc.value.trim(), bcc: bcc.value.trim(), subject: subject.value,
+    html: editor.innerHTML, text: editor.innerText || editor.textContent || '',
+    attachments: files,
+    sourceAttachments: srcMsg && srcAtts.length ? { ...srcMsg, indexes: srcAtts.map((a) => a.index) } : undefined,
+    inReplyTo: init.inReplyTo, references: init.references,
+    signatureId: sigSel.value || undefined, signatureBlock: currentBlock,
+    draftId: draftId || undefined,
+  });
+  const hasContent = () => !!(to.value.trim() || cc.value.trim() || bcc.value.trim() || subject.value.trim()
+    || (editor.innerText || '').trim() || files.length || srcAtts.length);
+
+  const draftStatus = h('span', { class: 'draft-status', 'aria-live': 'polite' });
+  // Enregistre le brouillon (remplace la version précédente). silent : sauvegarde automatique.
+  const saveDraft = async ({ silent = false } = {}) => {
+    if (saving) { try { await saving; } catch (_) { /* déjà signalé */ } }
+    const acc = from.value;
+    const wasDirty = dirty;
+    dirty = false;
+    const run = (async () => {
+      const res = await call(api.messages.saveDraft(acc, payload()));
+      // l'ancien brouillon était rangé dans un autre compte : on l'y retire
+      if (draftAccount && draftAccount !== acc && draftId) {
+        call(api.messages.discardDraft(draftAccount, draftId)).catch(() => {});
+      }
+      draftId = res.draftId || draftId;
+      draftAccount = acc;
+      draftReplaceable = res.replaceable !== false;
+      // les pièces jointes font maintenant partie du brouillon enregistré
+      if (res.uid && Array.isArray(res.attachments)) {
+        srcMsg = { accountId: acc, folder: res.folder, uid: res.uid };
+        srcAtts = res.attachments;
+        files = [];
+        renderAtt();
+      }
+      draftStatus.textContent = `Brouillon enregistré à ${dfDay.format(new Date())}`;
+      return res;
+    })();
+    saving = run;
+    try {
+      return await run;
+    } catch (err) {
+      if (wasDirty) dirty = true;
+      if (silent) draftStatus.textContent = 'Échec de l’enregistrement automatique';
+      throw err;
+    } finally {
+      if (saving === run) saving = null;
+    }
+  };
+  // Sauvegarde automatique toutes les 30 s quand quelque chose a changé
+  const autosave = setInterval(() => {
+    if (closed || !dirty || !hasContent()) return;
+    if (draftId && !draftReplaceable) return; // le serveur ne permet pas de remplacer : on évite les doublons
+    saveDraft({ silent: true }).catch(() => {});
+  }, 30000);
+
+  const title = { reply: 'Répondre', replyAll: 'Répondre à tous', forward: 'Transférer', draft: 'Brouillon' }[init.kind] || 'Nouveau message';
+
+  // Fermeture (Annuler, Échap, clic à côté) : on propose d'enregistrer ce qui ne l'est pas encore
+  const finish = (d) => { closed = true; clearInterval(autosave); d.close(); };
+  const requestClose = (d) => {
+    if (!hasContent() || (!dirty && draftId)) { finish(d); return; }
+    openDialog({
+      title: 'Fermer sans envoyer ?',
+      body: h('p', { style: 'margin:0' }, draftId
+        ? 'Enregistrer vos dernières modifications dans le brouillon ?'
+        : 'Voulez-vous enregistrer ce message comme brouillon ?'),
+      buttons: [
+        { label: draftId ? 'Supprimer le brouillon' : 'Ne pas enregistrer', kind: 'danger', onClick: async (d2) => {
+            d2.close();
+            finish(d);
+            if (saving) { try { await saving; } catch (_) { /* ignore */ } }
+            if (draftId && draftAccount) {
+              try { await call(api.messages.discardDraft(draftAccount, draftId)); toast('Brouillon supprimé.'); } catch (err) { toast(err.message, { error: true }); }
+            }
+          } },
+        { label: 'Continuer l’écriture', onClick: (d2) => d2.close() },
+        { label: 'Enregistrer', kind: 'primary', onClick: async (d2, b2) => {
+            b2.disabled = true;
+            try {
+              await saveDraft();
+              toast('Brouillon enregistré.');
+              d2.close();
+              finish(d);
+            } catch (err) { b2.disabled = false; d2.error(err.message); }
+          } },
+      ],
+    });
+  };
+
+  const sendNow = async (d, btn) => {
+    if (!to.value.trim() && !cc.value.trim() && !bcc.value.trim()) { d.error('Indiquez au moins un destinataire.'); return; }
+    if (btn) btn.disabled = true;
+    d.error('');
+    closed = true; // plus de sauvegarde automatique pendant l'envoi
+    try {
+      if (saving) { try { await saving; } catch (_) { /* ignore */ } }
+      const mail = payload();
+      // le brouillon (s'il existe) est supprimé du compte où il est rangé
+      if (draftAccount && draftAccount !== from.value) delete mail.draftId;
+      await call(api.messages.send(from.value, mail));
+      if (draftAccount && draftAccount !== from.value && draftId) call(api.messages.discardDraft(draftAccount, draftId)).catch(() => {});
+      clearInterval(autosave);
+      d.close();
+      toast('Message envoyé.');
+      if (init.replyOf) {
+        const r = init.replyOf;
+        call(api.messages.flag(r.accountId, r.folder, [r.uid], 'answered', true)).catch(() => {});
+      }
+      call(api.contacts.list()).then((c) => { state.contacts = c; }).catch(() => {});
+    } catch (err) { closed = false; if (btn) btn.disabled = false; d.error(err.message); }
   };
 
   const dlg = openDialog({
-    title: 'Nouveau message',
+    title,
     large: true,
+    onRequestClose: requestClose,
     body: h('div', { class: 'compose-grid' },
       h('div', { class: 'row-line' }, h('label', null, 'De'), from),
       h('div', { class: 'row-line' }, h('label', null, 'Signature'), sigSel),
-      h('div', { class: 'row-line' }, h('label', null, 'À'), to),
+      h('div', { class: 'row-line with-extra' }, h('label', null, 'À'), to, bccToggle),
       h('div', { class: 'row-line' }, h('label', null, 'Cc'), cc),
+      bccRow,
       h('div', { class: 'row-line' }, h('label', null, 'Objet'), subject),
       composeBox,
       sigImgs,
       h('div', null,
         h('button', { class: 'subtle', on: { click: async () => {
-          try { files = files.concat(await call(api.messages.pickAttachments())); renderAtt(); } catch (err) { dlg.error(err.message); }
+          try { const picked = await call(api.messages.pickAttachments()); if (picked.length) { files = files.concat(picked); markDirty(); renderAtt(); } } catch (err) { dlg.error(err.message); }
         } } }, ico('clip', 16), 'Joindre un fichier (ou glissez-déposez ici)'),
         attBox
       )
     ),
     buttons: [
-      { label: 'Annuler', onClick: (d) => {
-          const hasContent = to.value.trim() || cc.value.trim() || subject.value.trim() || editor.innerHTML.trim() || files.length > 0;
-          if (!hasContent) { d.close(); return; }
-          openDialog({
-            title: 'Fermer sans envoyer ?',
-            body: h('p', { style: 'margin:0' }, 'Voulez-vous enregistrer ce message comme brouillon ?'),
-            buttons: [
-              { label: 'Supprimer', kind: 'danger', onClick: (d2) => { d2.close(); d.close(); } },
-              { label: 'Annuler', onClick: (d2) => d2.close() },
-              { label: 'Enregistrer', kind: 'primary', onClick: async (d2) => {
-                 try {
-                    await call(api.messages.saveDraft(from.value, {
-                        to: to.value.trim(), cc: cc.value.trim(), subject: subject.value,
-                        html: editor.innerHTML, text: editor.innerText || editor.textContent || '',
-                        attachments: files, signatureId: sigSel.value || undefined, signatureBlock: currentBlock,
-                    }));
-                    toast('Brouillon enregistré.');
-                    d2.close();
-                    d.close();
-                 } catch (err) { d2.error(err.message); }
-              } },
-            ]
-          });
-      } },
-
-      {
-        id: 'send', label: 'Envoyer', kind: 'primary',
-        onClick: async (d, btn) => {
-          if (!to.value.trim()) { d.error('Indiquez au moins un destinataire.'); return; }
+      { label: 'Annuler', onClick: (d) => requestClose(d) },
+      { id: 'draft', label: 'Enregistrer le brouillon', onClick: async (d, btn) => {
           btn.disabled = true;
           d.error('');
-          try {
-            await call(api.messages.send(from.value, {
-              to: to.value.trim(), cc: cc.value.trim(), subject: subject.value,
-              html: editor.innerHTML, text: editor.innerText || editor.textContent || '',
-              attachments: files, inReplyTo: init.inReplyTo, references: init.references,
-              signatureId: sigSel.value || undefined, signatureBlock: currentBlock,
-            }));
-            d.close();
-            toast('Message envoyé.');
-            call(api.contacts.list()).then((c) => { state.contacts = c; }).catch(() => {});
-          } catch (err) { btn.disabled = false; d.error(err.message); }
-        },
-      },
+          try { await saveDraft(); } catch (err) { d.error(err.message); }
+          btn.disabled = false;
+        } },
+      { id: 'send', label: 'Envoyer', kind: 'primary', onClick: (d, btn) => sendNow(d, btn) },
     ],
   });
+  dlg.el.querySelector('.dialog-foot .grow').after(draftStatus);
 
   // Glisser-déposer de pièces jointes directement sur la fenêtre du message
   const dropOverlay = h('div', { class: 'compose-dropzone-overlay', hidden: true },
@@ -2507,13 +2806,36 @@ function openCompose(init = {}) {
       });
       files.push({ name: f.name, size: f.size, dataUrl: b64, path: diskPath || '' });
     }
+    markDirty();
     renderAtt();
     toast(`${dtFiles.length} ${plural(dtFiles.length, 'fichier ajouté', 'fichiers ajoutés')} en pièce jointe.`);
   });
 
   attachAutocomplete(to);
   attachAutocomplete(cc);
-  (init.to ? editor : to).focus();
+  attachAutocomplete(bcc);
+  [to, cc, bcc, subject].forEach((el) => el.addEventListener('input', markDirty));
+  editor.addEventListener('input', markDirty);
+  // Ctrl/Cmd+Entrée : envoyer ; Ctrl/Cmd+S : enregistrer le brouillon
+  dlg.el.addEventListener('keydown', (e) => {
+    if (!(e.ctrlKey || e.metaKey) || e.altKey) return;
+    if (e.key === 'Enter') { e.preventDefault(); sendNow(dlg, dlg.buttons.send); }
+    else if (e.key === 's' || e.key === 'S') {
+      e.preventDefault();
+      saveDraft().catch((err) => dlg.error(err.message));
+    }
+  });
+  if (init.to) {
+    // réponse : curseur au tout début du texte, au-dessus du message cité
+    editor.focus();
+    const r = document.createRange();
+    r.setStart(editor, 0);
+    r.collapse(true);
+    const sel = window.getSelection();
+    sel.removeAllRanges();
+    sel.addRange(r);
+    editor.scrollTop = 0;
+  } else to.focus();
 }
 
 // ----------------------------------------------------------------------- règles
@@ -3325,13 +3647,13 @@ async function openImportPreview(file, accountId) {
 
 // --------------------------------------------------------------- événements
 
-const refreshAccount = debounce(async (accountId) => {
+const refreshAccount = debounce(async (accountId, changed) => {
   await loadFolders(accountId);
   const { accountId: cur, folder } = state.current;
-  if (state.view === 'mail' && !state.query && (cur === 'unified' || (cur === accountId && folder === 'INBOX'))) loadMessages({ silent: true });
+  if (state.view === 'mail' && !state.query && (cur === 'unified' || (cur === accountId && (folder === 'INBOX' || folder === changed)))) loadMessages({ silent: true });
 }, 800);
 
-api.on('mail:changed', ({ accountId }) => refreshAccount(accountId));
+api.on('mail:changed', ({ accountId, folder }) => refreshAccount(accountId, folder));
 api.on('mail:sorted', ({ moved }) => {
   toast(`${moved.length} ${plural(moved.length, 'nouveau message rangé', 'nouveaux messages rangés')} automatiquement.`);
   if (state.prefs.notifications !== false && typeof Notification !== 'undefined') {
@@ -3410,7 +3732,11 @@ document.addEventListener('keydown', (e) => {
   if (e.metaKey || e.ctrlKey || e.altKey) return;
   if (state.tab !== 'list') {
     const t = activeTabObj();
-    if (e.key === 'r' && t && t.kind === 'mail' && t.o.detail) { e.preventDefault(); replyTo(t.o); }
+    if (t && t.kind === 'mail' && t.o.detail) {
+      if (e.key === 'r') { e.preventDefault(); replyTo(t.o); }
+      else if (e.key === 'a') { e.preventDefault(); replyAll(t.o); }
+      else if (e.key === 'f') { e.preventDefault(); forward(t.o); }
+    }
     return; // la liste est masquée : ses raccourcis ne s'appliquent pas
   }
   if (e.key === 'Escape') return;
@@ -3439,6 +3765,8 @@ document.addEventListener('keydown', (e) => {
     const sel = selectedMessages();
     if (sel.length) { e.preventDefault(); openFilePicker(sel); }
   } else if (e.key === 'r' && state.opened && state.opened.detail) { e.preventDefault(); replyTo(state.opened); }
+  else if (e.key === 'a' && state.opened && state.opened.detail) { e.preventDefault(); replyAll(state.opened); }
+  else if (e.key === 'f' && state.opened && state.opened.detail) { e.preventDefault(); forward(state.opened); }
   else if (e.key === 'u') {
     const sel = selectedMessages();
     if (sel.length) { e.preventDefault(); setSeen(sel, !sel.every((m) => m.seen)); }

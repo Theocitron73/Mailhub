@@ -85,6 +85,14 @@ function createWindow() {
       if (isSafeExternal(url)) shell.openExternal(url);
     }
   });
+  // Filet de sécurité : un lien du message qui tenterait de charger une page DANS l'aperçu
+  // (target="_self", formulaire…) est ouvert dans le navigateur à la place.
+  mainWindow.webContents.on('will-frame-navigate', (event) => {
+    const { url, isMainFrame } = event;
+    if (isMainFrame || !url || /^(about:|data:|blob:|file:)/i.test(url)) return;
+    event.preventDefault();
+    if (isSafeExternal(url)) shell.openExternal(url);
+  });
 
   // Windows/Linux : fermer la fenêtre réduit MailHub dans la zone de notification
   // pour que le tri automatique continue. « Quitter » se trouve dans le menu de l'icône.
@@ -237,6 +245,7 @@ function registerIpc() {
   handle('messages:markAllReadInAccount', (accountId) => manager.markAllReadInAccount(accountId));
   handle('messages:deleteAllInFolder', (accountId, folder) => manager.deleteAllInFolder(accountId, folder));
   handle('messages:saveDraft', (accountId, mail) => manager.saveDraft(accountId, mail));
+  handle('messages:discardDraft', (accountId, draftId) => manager.discardDraft(accountId, draftId));
 
   // Boîte de réception unifiée : fusion des boîtes de tous les comptes
   handle('messages:unified', async (limit = 50) => {
@@ -272,6 +281,14 @@ function registerIpc() {
   });
 
   handle('app:hide', () => { if (mainWindow) mainWindow.hide(); return true; });
+
+  // Liens cliqués dans un e-mail : navigateur par défaut (http, https) ou logiciel associé (mailto)
+  handle('app:openExternal', async (url) => {
+    const u = String(url || '');
+    if (!isSafeExternal(u)) throw new Error('Ce lien ne peut pas être ouvert (adresse non web).');
+    await shell.openExternal(u);
+    return true;
+  });
 
   handle('messages:saveAttachment', async (accountId, folder, uid, index) => {
     const att = await manager.getAttachment(accountId, folder, uid, index);

@@ -146,6 +146,7 @@
       markAllReadInAccount: (accountId) => invoke('messages:markAllReadInAccount', accountId),
       deleteAllInFolder: (accountId, folder) => invoke('messages:deleteAllInFolder', accountId, folder),
       saveDraft: (accountId, mail) => invoke('messages:saveDraft', accountId, mail),
+      discardDraft: (accountId, draftId) => invoke('messages:discardDraft', accountId, draftId),
       flagged: () => invoke('messages:flagged'),
       pickAttachments: () => {
         return new Promise((resolve) => {
@@ -253,6 +254,12 @@
 
     app: {
       hide: () => Promise.resolve({ ok: true, data: true }),
+      openExternal: (url) => {
+        const u = String(url || '');
+        if (!/^(https?|mailto):/i.test(u)) return Promise.resolve({ ok: false, error: 'Ce lien ne peut pas être ouvert (adresse non web).' });
+        window.open(u, '_blank', 'noopener,noreferrer');
+        return Promise.resolve({ ok: true, data: true });
+      },
     },
 
     thunderbird: {

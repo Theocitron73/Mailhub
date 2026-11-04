@@ -55,6 +55,7 @@ contextBridge.exposeInMainWorld('mailhub', {
     markAllReadInAccount: (accountId) => invoke('messages:markAllReadInAccount', accountId),
     deleteAllInFolder: (accountId, folder) => invoke('messages:deleteAllInFolder', accountId, folder),
     saveDraft: (accountId, mail) => invoke('messages:saveDraft', accountId, mail),
+    discardDraft: (accountId, draftId) => invoke('messages:discardDraft', accountId, draftId),
     flagged: () => invoke('messages:flagged'),
     pickAttachments: () => invoke('messages:pickAttachments'),
   },
@@ -91,6 +92,7 @@ contextBridge.exposeInMainWorld('mailhub', {
 
   app: {
     hide: () => invoke('app:hide'),
+    openExternal: (url) => invoke('app:openExternal', url),
   },
 
   // import des filtres Thunderbird

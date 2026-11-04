@@ -34,7 +34,13 @@ automatiquement les nouveaux messages dans vos dossiers.
 - Lecture HTML sécurisée, pièces jointes, recherche, étoile, lu / non lu, suppression (vers la corbeille), réponse, transfert et envoi de messages (SMTP).
 - Thème clair, sombre ou automatique.
 
-Raccourcis : `j` / `k` (message suivant / précédent), `m` (ranger), `r` (répondre), `u` (lu / non lu), `Suppr` (supprimer).
+- **Liens des messages** : un clic ouvre le lien dans votre navigateur (les liens `mailto:` ouvrent la rédaction de MailHub) ; au survol, l'adresse réelle du lien s'affiche en bas de la fenêtre. Les adresses web et e-mail des messages en texte brut sont cliquables.
+- **Répondre / Répondre à tous** : « Répondre » écrit à l'auteur (ou à son adresse de réponse) ; « Répondre à tous » ajoute les autres destinataires et la copie, sans jamais vous inclure vous-même. Sur un message que vous avez envoyé, la réponse va à ses destinataires. Le message d'origine est marqué « répondu ».
+- **Brouillons** : enregistrement manuel (`Ctrl/Cmd+S` ou bouton) et **automatique toutes les 30 secondes** ; chaque enregistrement remplace la version précédente (pas de doublons). Dans « Brouillons », un double-clic (ou `Entrée`, ou « Continuer l'écriture ») rouvre le brouillon avec ses destinataires, sa mise en forme et ses pièces jointes ; il est supprimé une fois envoyé. Échap ou un clic à côté de la fenêtre ne ferment plus un message sans demander.
+- **Transfert avec pièces jointes** : les pièces jointes d'origine sont reprises (retirables une à une).
+- **Copie cachée (Cci)** dans la rédaction.
+
+Raccourcis : `j` / `k` (message suivant / précédent), `m` (ranger), `r` (répondre), `a` (répondre à tous), `f` (transférer), `u` (lu / non lu), `Suppr` (supprimer). Dans la rédaction : `Ctrl/Cmd+Entrée` (envoyer), `Ctrl/Cmd+S` (enregistrer le brouillon).
 
 ## Installer l'application
 
