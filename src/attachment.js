@@ -25,4 +25,32 @@ function attachmentPreview(att) {
   return { ...base, kind: 'other' };
 }
 
-module.exports = { attachmentPreview, MAX_PREVIEW };
+// Pièces jointes d'un message à envoyer : seuls les fichiers choisis par l'utilisateur (allowedPaths)
+// peuvent être lus sur le disque ; sinon on n'accepte que le contenu transmis (data URI).
+// Empêche une interface compromise de faire partir n'importe quel fichier de l'ordinateur.
+const MAX_ATTACH_TOTAL = 35 * 1024 * 1024;
+function safeOutgoing(mail, allowedPaths, statSize) {
+  const m = { ...(mail || {}) };
+  let total = 0;
+  m.attachments = (Array.isArray(m.attachments) ? m.attachments : []).map((a) => {
+    if (!a || typeof a !== 'object') return null;
+    const out = {
+      name: String(a.name || 'piece-jointe').split(/[\\/]/).pop() || 'piece-jointe',
+      contentType: typeof a.contentType === 'string' ? a.contentType : undefined,
+    };
+    if (typeof a.path === 'string' && allowedPaths.has(a.path)) {
+      const size = statSize(a.path);
+      if (size === null) return null;
+      out.path = a.path;
+      total += size;
+    } else if (typeof a.dataUrl === 'string' && a.dataUrl.startsWith('data:')) {
+      out.dataUrl = a.dataUrl;
+      total += Math.floor(a.dataUrl.length * 0.75);
+    } else return null;
+    return out;
+  }).filter(Boolean);
+  if (total > MAX_ATTACH_TOTAL) throw new Error('Pièces jointes trop lourdes (35 Mo au total au maximum).');
+  return m;
+}
+
+module.exports = { attachmentPreview, MAX_PREVIEW, safeOutgoing, MAX_ATTACH_TOTAL };

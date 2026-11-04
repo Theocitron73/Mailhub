@@ -95,6 +95,8 @@ const state = {
   opened: null,       // { msg, detail, loading, error, allowRemote }
   rules: [],
   contacts: [],
+  scheduled: [],      // messages en attente d'envoi programmé
+  threadOpen: new Set(), // conversations dépliées
   view: 'mail',       // mail | rules | settings | welcome
   tabs: [],           // onglets ouverts (messages, pièces jointes)
   tab: 'list',        // onglet actif ('list' = Messages)
@@ -365,6 +367,15 @@ function renderSidebar() {
     class: 'folder' + (isFav ? ' active' : ''), title: 'Messages marqués d’une étoile, tous comptes confondus',
     on: { click: () => selectFolder('favorites', '') },
   }, ico('star'), h('span', { class: 'name' }, 'Favoris')));
+
+  if ((state.scheduled || []).length || state.view === 'scheduled') {
+    const failed = state.scheduled.some((x) => x.error);
+    nav.appendChild(h('button', {
+      class: 'folder' + (state.view === 'scheduled' ? ' active' : ''), title: 'Messages en attente d’envoi programmé',
+      on: { click: () => showPanel('scheduled') },
+    }, ico('send'), h('span', { class: 'name' }, 'Envoi programmé'),
+      state.scheduled.length ? h('span', { class: 'count' + (failed ? ' warn' : '') }, state.scheduled.length) : null));
+  }
 
   state.accounts.forEach((acc) => {
     const open = state.open[acc.id] !== false;
@@ -814,6 +825,7 @@ function showPanel(view) {
   renderSidebar();
   if (view === 'rules') renderRulesPanel();
   else if (view === 'settings') renderSettingsPanel();
+  else if (view === 'scheduled') renderScheduledPanel();
   else if (view === 'welcome') renderWelcome();
 }
 
@@ -1006,10 +1018,43 @@ document.addEventListener('drop', hideDragHint, true);
 
 // ------------------------------------------------------------------ messages
 
+// ---- cache des listes : un dossier déjà vu s'affiche instantanément, puis se met à jour en arrière-plan
+const LIST_CACHE_KEY = 'mailhub.listCache.v1';
+const listCache = new Map();
+try {
+  const raw = localStorage.getItem(LIST_CACHE_KEY);
+  if (raw) Object.entries(JSON.parse(raw)).forEach(([k, v]) => listCache.set(k, v));
+} catch (_) { /* cache indisponible : on s'en passe */ }
+const SUMMARY_FIELDS = ['uid', 'accountId', 'folder', 'subject', 'from', 'fromName', 'to', 'cc', 'date', 'size', 'seen', 'flagged', 'answered', 'hasAttachment'];
+const slim = (m) => { const o = {}; SUMMARY_FIELDS.forEach((f) => { if (m[f] !== undefined) o[f] = m[f]; }); return o; };
+function writeListCache() {
+  try {
+    const obj = {};
+    [...listCache.entries()].slice(-30).forEach(([k, v]) => { obj[k] = v; });
+    localStorage.setItem(LIST_CACHE_KEY, JSON.stringify(obj));
+  } catch (_) { /* quota dépassé : tant pis */ }
+}
+const persistListCache = debounce(writeListCache, 2000);
+window.addEventListener('beforeunload', writeListCache);
+function rememberList(accountId, folder, messages, total) {
+  const k = `${accountId}|${folder}`;
+  listCache.delete(k); // le plus récent en dernier
+  listCache.set(k, { messages: messages.slice(0, 100).map(slim), total });
+  persistListCache();
+}
+
 async function loadMessages({ append = false, silent = false } = {}) {
   if (!state.accounts.length) return;
   const token = ++loadToken;
   const { accountId, folder } = state.current;
+  const cached = !append && !state.query && !state.messages.length ? listCache.get(`${accountId}|${folder}`) : null;
+  if (cached && cached.messages.length) {
+    state.messages = sortMessages(cached.messages.map((m) => ({ ...m })));
+    state.total = cached.total;
+    state.error = '';
+    silent = true;
+    renderList();
+  }
   if (!silent) { state.loading = true; state.error = ''; renderList(); }
   try {
     let messages = [];
@@ -1049,6 +1094,7 @@ async function loadMessages({ append = false, silent = false } = {}) {
     if (token !== loadToken) return;
     state.messages = sortMessages(messages);
     state.total = total;
+    if (!state.query) rememberList(accountId, folder, state.messages, total);
     state.error = '';
     // on garde uniquement les sélections qui existent encore
     const keys = new Set(messages.map(keyOf));
@@ -1121,6 +1167,12 @@ function renderSortRow() {
   btn.title = labels[sortBy()] + ' (cliquer pour inverser)';
   const partial = sortBy() !== 'date' && !state.query && !['unified', 'favorites'].includes(state.current.accountId) && state.messages.length < state.total;
   $('#sort-note').textContent = partial ? `parmi les ${state.messages.length} chargés` : '';
+  const tb = $('#btn-threads');
+  if (tb) {
+    tb.hidden = state.current.accountId === 'favorites';
+    tb.classList.toggle('on', !!state.prefs.threads);
+    tb.setAttribute('aria-pressed', String(!!state.prefs.threads));
+  }
 }
 async function setSort(by, dir) {
   try { state.prefs = await call(api.prefs.set({ sortBy: by, sortDir: dir })); } catch (err) { toast(err.message, { error: true }); return; }
@@ -1149,15 +1201,16 @@ function renderList() {
   if (!state.messages.length) {
     rows.appendChild(h('div', { class: 'empty' },
       h('h2', null, state.query ? 'Aucun résultat' : state.current.accountId === 'favorites' ? 'Aucun favori' : 'Ce dossier est vide'),
-      h('p', null, state.query ? `Aucun message ne contient « ${state.query} » dans l’expéditeur, le destinataire ou l’objet.` : state.current.accountId === 'favorites' ? 'Cliquez sur l’étoile d’un message pour le retrouver ici, quel que soit son dossier.' : 'Les nouveaux messages apparaîtront ici dès leur arrivée.')));
+      h('p', null, state.query ? `Aucun message ne contient « ${state.query} » dans l’expéditeur, le destinataire, l’objet ou le texte.` : state.current.accountId === 'favorites' ? 'Cliquez sur l’étoile d’un message pour le retrouver ici, quel que soit son dossier.' : 'Les nouveaux messages apparaîtront ici dès leur arrivée.')));
     return;
   }
 
-  state.messages.forEach((m) => {
+  listView().forEach(({ m, thread, child }) => {
     const key = keyOf(m);
     const selected = state.sel.has(key);
+    const unread = thread ? thread.unseen > 0 : !m.seen;
     const row = h('div', {
-      class: 'row' + (m.seen ? '' : ' unread') + (selected ? ' selected' : '') + (unified ? ' has-acc' : ''),
+      class: 'row' + (unread ? ' unread' : '') + (selected ? ' selected' : '') + (unified ? ' has-acc' : '') + (thread ? ' thread' + (thread.open ? ' open' : '') : '') + (child ? ' child' : ''),
       draggable: 'true', role: 'option', 'aria-selected': selected ? 'true' : 'false',
       vars: { '--acc': accColor(m.accountId) },
       on: {
@@ -1169,10 +1222,17 @@ function renderList() {
         dragend: () => { row.classList.remove('dragging'); hideDragHint(); },
       },
     },
-    h('div', { class: 'from' }, h('span', { class: 'dot' }), h('span', { class: 'who' }, correspondentLabel(m))),
+    h('div', { class: 'from' },
+      thread ? h('button', {
+        class: 'thread-toggle', title: thread.open ? 'Replier la conversation' : 'Déplier la conversation', 'aria-expanded': String(thread.open),
+        on: { click: (e) => { e.stopPropagation(); toggleThread(thread.key); }, dblclick: (e) => e.stopPropagation() },
+      }, ico('chevron', 13)) : null,
+      h('span', { class: 'dot' }), h('span', { class: 'who' }, correspondentLabel(m)),
+      thread ? h('span', { class: 'thread-count', title: `${thread.members.length} messages dans cette conversation` }, thread.members.length) : null),
     h('div', { class: 'date' }, fmtDate(m.date)),
     h('div', { class: 'subject' }, m.subject),
     h('div', { class: 'marks' },
+      m.answered ? h('span', { class: 'answered', title: 'Vous avez répondu' }, ico('reply', 15)) : null,
       m.hasAttachment ? h('span', { title: 'Pièce jointe' }, ico('clip', 15)) : null,
       h('button', {
         class: 'icon-btn star-btn' + (m.flagged ? ' on' : ''), title: m.flagged ? 'Retirer des favoris' : 'Ajouter aux favoris', 'aria-label': m.flagged ? 'Retirer des favoris' : 'Ajouter aux favoris',
@@ -1193,7 +1253,7 @@ function renderList() {
 function renderSelectionBar() {
   const bar = $('#selection-bar');
   const sel = selectedMessages();
-  if (sel.length < 2) { bar.hidden = true; return; }
+  if (state.sel.size < 2) { bar.hidden = true; return; }
   bar.hidden = false;
   clear(bar);
   const anyUnread = sel.some((m) => !m.seen);
@@ -1201,12 +1261,21 @@ function renderSelectionBar() {
     h('span', { class: 'sel-count' }, `${sel.length} sélectionnés`),
     h('button', { class: 'subtle', on: { click: () => openFilePicker(sel) } }, ico('folder', 16), 'Ranger…'),
     h('button', { class: 'subtle', on: { click: () => setSeen(sel, anyUnread) } }, ico('mailopen', 16), anyUnread ? 'Lu' : 'Non lu'),
+    h('button', { class: 'subtle', on: { click: () => markJunk(sel, !sel.every((m) => isJunkFolder(m.accountId, m.folder))) } }, ico('junk', 16),
+      sel.every((m) => isJunkFolder(m.accountId, m.folder)) ? 'Pas indésirable' : 'Indésirable'),
     h('button', { class: 'subtle', on: { click: () => deleteMessages(sel) } }, ico('trash', 16), 'Supprimer'),
     h('button', { class: 'icon-btn', title: 'Annuler la sélection', 'aria-label': 'Annuler la sélection', on: { click: () => { state.sel.clear(); renderList(); } } }, ico('close', 16))
   );
 }
 
-const selectedMessages = () => state.messages.filter((m) => state.sel.has(keyOf(m)));
+// Une conversation repliée et sélectionnée compte pour tous ses messages (ranger, supprimer…)
+const selectedMessages = () => {
+  const picked = new Set(state.messages.filter((m) => state.sel.has(keyOf(m))));
+  if (threadsOn()) {
+    listView().forEach((r) => { if (r.thread && !r.thread.open && state.sel.has(keyOf(r.m))) r.thread.members.forEach((x) => picked.add(x)); });
+  }
+  return state.messages.filter((m) => picked.has(m));
+};
 
 let lastClickTime = 0;
 let lastClickKey = null;
@@ -1230,7 +1299,7 @@ function onRowClick(e, m) {
     return;
   }
   if (e.shiftKey && state.anchor) {
-    const keys = state.messages.map(keyOf);
+    const keys = listView().map((r) => keyOf(r.m));
     const a = keys.indexOf(state.anchor);
     const b = keys.indexOf(key);
     if (a >= 0 && b >= 0) {
@@ -1264,7 +1333,8 @@ function onRowContextMenu(e, m) {
     renderList();
   }
   const sel = selectedMessages();
-  const isMultiple = sel.length > 1;
+  const isMultiple = state.sel.size > 1;
+  const inJunk = sel.every((x) => isJunkFolder(x.accountId, x.folder));
   const anyUnread = sel.some((x) => !x.seen);
   const anyUnflagged = sel.some((x) => !x.flagged);
 
@@ -1342,8 +1412,11 @@ function onRowContextMenu(e, m) {
       },
     ] : []),
     { separator: true },
+    inJunk
+      ? { label: 'Pas indésirable', icon: 'inbox', shortcut: 'Maj+J', onClick: () => markJunk(sel, false) }
+      : { label: 'Indésirable', icon: 'junk', shortcut: 'Maj+J', onClick: () => markJunk(sel, true) },
     {
-      label: isMultiple ? `Supprimer les ${sel.length} messages` : 'Supprimer',
+      label: sel.length > 1 ? `Supprimer les ${sel.length} messages` : 'Supprimer',
       icon: 'trash',
       shortcut: 'Suppr',
       danger: true,
@@ -2007,6 +2080,9 @@ function renderMailInto(reader, o, redraw) {
           canReplyAll(d) ? h('button', { class: 'icon-btn', title: 'Répondre à tous (A)', 'aria-label': 'Répondre à tous', on: { click: () => replyAll(o) } }, ico('replyAll')) : null,
           h('button', { class: 'icon-btn', title: 'Transférer (F)', 'aria-label': 'Transférer', on: { click: () => forward(o) } }, ico('forward')),
           h('button', { class: 'icon-btn', title: 'Marquer comme non lu', 'aria-label': 'Marquer comme non lu', on: { click: () => setSeen([m], false) } }, ico('mailopen')),
+          isJunkFolder(m.accountId, m.folder)
+            ? h('button', { class: 'icon-btn', title: 'Pas indésirable (Maj+J)', 'aria-label': 'Pas indésirable', on: { click: () => markJunk([m], false) } }, ico('inbox'))
+            : h('button', { class: 'icon-btn', title: 'Indésirable (Maj+J)', 'aria-label': 'Indésirable', on: { click: () => markJunk([m], true) } }, ico('junk')),
           h('button', { class: 'icon-btn', title: 'Supprimer', 'aria-label': 'Supprimer', on: { click: () => deleteMessages([m]) } }, ico('trash'))),
         h('div', { class: 'reader-date' }, dfFull.format(new Date(d.date)))))));
 
@@ -2117,6 +2193,21 @@ async function saveAttachment(m, a) {
 
 // --------------------------------------------------------------------- écriture
 
+// Citation du message d'origine avec sa mise en forme (HTML nettoyé), dans un bloc « cité »
+function quoteHtml(d, { remote = false, forward = false } = {}) {
+  const inner = d.html ? sanitizeHtml(d.html, { remote }) : esc(d.text || '').replace(/\n/g, '<br>');
+  if (forward) {
+    const fmt = (list) => esc((list || []).map(addrLabel).join(', '));
+    return '<br><div class="mh-fwd-head">---------- Message transféré ----------<br>' +
+      `De : ${esc(addrLabel(d.from))}<br>Date : ${esc(dfFull.format(new Date(d.date)))}<br>Objet : ${esc(d.subject)}<br>À : ${fmt(d.to)}` +
+      (d.cc && d.cc.length ? `<br>Cc : ${fmt(d.cc)}` : '') + '</div><br>' + `<div class="mh-fwd">${inner}</div>`;
+  }
+  const who = esc(d.from.name || d.from.address);
+  return `<br><div class="mh-quote-head">Le ${esc(dfFull.format(new Date(d.date)))}, ${who} a écrit :</div>` +
+    `<blockquote type="cite" style="margin:6px 0 0 4px;padding-left:12px;border-left:2px solid #c8ced6;color:#444">${inner}</blockquote>`;
+}
+const remoteAllowed = (o) => !!(o && o.allowRemote) || state.prefs.remoteContent === 'always';
+
 function quoteText(d) {
   const who = d.from.name || d.from.address;
   const head = `Le ${dfFull.format(new Date(d.date))}, ${who} a écrit :`;
@@ -2171,7 +2262,7 @@ function replyTo(o, { all = false } = {}) {
     to,
     cc,
     subject: replySubject(d.subject === '(sans objet)' ? '' : d.subject),
-    body: quoteText(d),
+    quoteHtml: quoteHtml(d, { remote: remoteAllowed(o) }),
     inReplyTo: d.messageId,
     references: [...(d.references || []), d.messageId].filter(Boolean),
     replyOf: { accountId: o.msg.accountId, folder: o.msg.folder, uid: o.msg.uid },
@@ -2188,13 +2279,11 @@ function canReplyAll(d) {
 
 function forward(o) {
   const d = o.detail;
-  const fmt = (list) => (list || []).map(addrLabel).join(', ');
-  const head = `\n\n---------- Message transféré ----------\nDe : ${addrLabel(d.from)}\nDate : ${dfFull.format(new Date(d.date))}\nObjet : ${d.subject}\nÀ : ${fmt(d.to)}${d.cc && d.cc.length ? '\nCc : ' + fmt(d.cc) : ''}\n\n`;
   openCompose({
     kind: 'forward',
     accountId: o.msg.accountId,
     subject: /^\s*(tr|fwd?)\s*:/i.test(d.subject) ? d.subject : 'Tr: ' + d.subject,
-    body: head + (d.text || ''),
+    quoteHtml: quoteHtml(d, { remote: remoteAllowed(o), forward: true }),
     // les pièces jointes d'origine sont reprises (relues sur le serveur à l'envoi)
     sourceMsg: { accountId: o.msg.accountId, folder: o.msg.folder, uid: o.msg.uid },
     sourceList: d.attachments || [],
@@ -2210,16 +2299,25 @@ function isDraftsFolder(accountId, path) {
 const isDraft = (m, d) => !!(m && (isDraftsFolder(m.accountId, m.folder) || (d && d.draft)));
 
 // HTML d'un brouillon remis dans l'éditeur : on ne garde que la mise en forme (ni script, ni formulaire, ni cadre).
-function sanitizeHtml(html) {
+function sanitizeHtml(html, { remote = true } = {}) {
   const doc = new DOMParser().parseFromString(String(html || ''), 'text/html');
+  const remoteUrl = /^\s*(https?:)?\/\//i;
   const DROP = new Set(['SCRIPT', 'STYLE', 'IFRAME', 'FRAME', 'FRAMESET', 'OBJECT', 'EMBED', 'APPLET', 'FORM', 'INPUT', 'BUTTON', 'SELECT', 'TEXTAREA', 'LINK', 'META', 'BASE', 'TITLE', 'SVG', 'MATH', 'TEMPLATE', 'NOSCRIPT', 'VIDEO', 'AUDIO', 'SOURCE', 'TRACK']);
   const walk = (node) => {
     [...node.children].forEach((el) => {
       if (DROP.has(el.tagName.toUpperCase())) { el.remove(); return; }
+      // images distantes d'un message cité : pas chargées sans autorisation (pixels espions)
+      if (!remote && el.tagName.toUpperCase() === 'IMG' && remoteUrl.test(el.getAttribute('src') || '')) { el.remove(); return; }
       [...el.attributes].forEach((at) => {
         const n = at.name.toLowerCase();
         const v = at.value.trim();
-        if (n.startsWith('on') || n === 'srcdoc' || n === 'formaction') el.removeAttribute(at.name);
+        if (n === 'style') {
+          // rien ne doit pouvoir recouvrir la fenêtre de rédaction
+          let st = v.replace(/position\s*:\s*(fixed|absolute|sticky)[^;]*;?/gi, '');
+          if (!remote) st = st.replace(/url\(\s*['"]?\s*(https?:)?\/\/[^)]*\)/gi, 'none');
+          el.setAttribute('style', st);
+        } else if (!remote && n === 'background' && remoteUrl.test(v)) el.removeAttribute(at.name);
+        else if (n.startsWith('on') || n === 'srcdoc' || n === 'formaction') el.removeAttribute(at.name);
         else if ((n === 'href' || n === 'src' || n === 'xlink:href' || n === 'action' || n === 'background') && !/^(https?:|mailto:|data:image\/|cid:|#)/i.test(v)) el.removeAttribute(at.name);
       });
       walk(el);
@@ -2238,6 +2336,7 @@ async function resumeDraft(m, detail) {
   const fmt = (list) => (list || []).map(addrLabel).filter(Boolean).join(', ');
   openCompose({
     kind: 'draft',
+    keepBody: true,
     accountId: m.accountId,
     to: fmt(d.to),
     cc: fmt(d.cc),
@@ -2249,9 +2348,227 @@ async function resumeDraft(m, detail) {
     references: d.references || [],
     draftId: d.messageId || null,
     signatureId: d.signatureId || '',
+    replyOf: d.replyOf || undefined,
     sourceMsg: { accountId: m.accountId, folder: m.folder, uid: m.uid },
     sourceList: d.attachments || [],
   });
+}
+
+// ---- annulation d'envoi, envoi programmé
+const undoDelay = () => {
+  const v = Number(state.prefs.undoSendDelay);
+  return Number.isFinite(v) && v >= 0 ? Math.min(v, 60) : 5;
+};
+
+// Messages en attente pendant le délai d'annulation : ils partent tout de suite si la fenêtre se ferme
+const pendingSends = new Set();
+function queueSend({ delay, run, label, reopen }) {
+  const job = { done: false };
+  const fire = async () => {
+    if (job.done) return;
+    job.done = true;
+    clearTimeout(job.timer);
+    pendingSends.delete(job);
+    try { await run(); } catch (err) {
+      toast(`« ${label} » n’a pas pu être envoyé : ${err.message}`, { error: true, timeout: 20000, actions: [{ label: 'Rouvrir', onClick: reopen }] });
+    }
+  };
+  job.fire = fire;
+  job.timer = setTimeout(fire, delay * 1000);
+  pendingSends.add(job);
+  toast(`Envoi dans ${delay} s…`, {
+    timeout: delay * 1000,
+    actions: [{ label: 'Annuler l’envoi', onClick: () => {
+      if (job.done) { toast('Trop tard : le message est déjà parti.', { error: true }); return; }
+      job.done = true;
+      clearTimeout(job.timer);
+      pendingSends.delete(job);
+      reopen();
+    } }],
+  });
+}
+window.addEventListener('beforeunload', () => { [...pendingSends].forEach((j) => j.fire()); });
+
+const dfWhen = new Intl.DateTimeFormat('fr-FR', { weekday: 'long', day: 'numeric', month: 'long', hour: '2-digit', minute: '2-digit' });
+function fmtWhen(date) {
+  const d = new Date(date);
+  const today = new Date();
+  const tomorrow = new Date(today.getFullYear(), today.getMonth(), today.getDate() + 1);
+  const hm = dfDay.format(d);
+  if (d.toDateString() === today.toDateString()) return `aujourd’hui à ${hm}`;
+  if (d.toDateString() === tomorrow.toDateString()) return `demain à ${hm}`;
+  return 'le ' + dfWhen.format(d);
+}
+
+// Choix de la date d'envoi : raccourcis courants ou date libre
+function pickSendTime(initial) {
+  return new Promise((resolve) => {
+    let done = false;
+    const finish = (v) => { if (!done) { done = true; resolve(v); } };
+    const now = new Date();
+    const at = (days, hour) => new Date(now.getFullYear(), now.getMonth(), now.getDate() + days, hour, 0, 0, 0);
+    const monday = (() => { const n = (8 - now.getDay()) % 7 || 7; return at(n, 8); })();
+    const options = [
+      ['Dans 1 heure', new Date(Math.ceil((now.getTime() + 3600000) / 300000) * 300000)],
+      ...(now.getHours() < 17 ? [['Ce soir à 18 h', at(0, 18)]] : []),
+      ['Demain à 8 h', at(1, 8)],
+      ['Demain à 14 h', at(1, 14)],
+      ...(now.getDay() !== 0 ? [['Lundi à 8 h', monday]] : []),
+    ];
+    const pad = (n) => String(n).padStart(2, '0');
+    const local = (d) => `${d.getFullYear()}-${pad(d.getMonth() + 1)}-${pad(d.getDate())}T${pad(d.getHours())}:${pad(d.getMinutes())}`;
+    const custom = h('input', { type: 'datetime-local', value: local(initial ? new Date(initial) : at(1, 8)), min: local(now) });
+    const dlg = openDialog({
+      title: 'Envoyer plus tard',
+      subtitle: 'MailHub enverra le message à l’heure choisie (s’il est fermé à ce moment-là, au prochain démarrage).',
+      onClose: () => finish(null),
+      body: h('div', { class: 'when-grid' },
+        options.map(([label, d]) => h('button', { class: 'ghost when-opt', on: { click: () => { finish(d); dlg.close(); } } },
+          h('b', null, label), h('small', null, fmtWhen(d)))),
+        h('div', { class: 'field' }, h('label', null, 'Date et heure précises'), custom)),
+      buttons: [
+        { label: 'Annuler', onClick: (d) => d.close() },
+        { label: 'Programmer', kind: 'primary', onClick: (d) => {
+            const v = new Date(custom.value);
+            if (Number.isNaN(v.getTime())) { d.error('Choisissez une date.'); return; }
+            if (v.getTime() < Date.now() - 60000) { d.error('Cette date est déjà passée.'); return; }
+            finish(v);
+            d.close();
+          } },
+      ],
+    });
+  });
+}
+
+async function refreshScheduled() {
+  try { state.scheduled = await call(api.scheduled.list()); } catch (_) { return; }
+  renderSidebar();
+  if (state.view === 'scheduled') renderScheduledPanel();
+}
+
+function renderScheduledPanel() {
+  const panel = $('#panel');
+  clear(panel);
+  const list = state.scheduled || [];
+  const reopen = async (it) => {
+    try {
+      const { accountId, mail } = await call(api.scheduled.cancel(it.id));
+      await refreshScheduled();
+      openCompose({
+        kind: 'scheduled', keepBody: true, accountId,
+        to: mail.to, cc: mail.cc, bcc: mail.bcc, subject: mail.subject, bodyHtml: mail.html,
+        signatureId: mail.signatureId || '', files: mail.attachments || [],
+        sourceMsg: mail.sourceAttachments ? { accountId: mail.sourceAttachments.accountId, folder: mail.sourceAttachments.folder, uid: mail.sourceAttachments.uid } : null,
+        sourceList: [],
+        inReplyTo: mail.inReplyTo, references: mail.references, replyOf: mail.replyOf,
+      });
+    } catch (err) { toast(err.message, { error: true }); }
+  };
+  panel.appendChild(h('div', { class: 'panel-inner' },
+    h('h1', null, 'Envoi programmé'),
+    h('p', { class: 'lead' }, 'Ces messages partiront automatiquement à l’heure indiquée. Pour en programmer un, utilisez « Envoyer plus tard… » dans la fenêtre de rédaction.'),
+    list.length ? null : h('div', { class: 'empty' }, h('h2', null, 'Aucun message en attente'), h('p', null, 'Les messages programmés apparaîtront ici.')),
+    list.map((it) => {
+      const acc = accountById(it.accountId);
+      return h('div', { class: 'sched-item', vars: { '--acc': acc ? acc.color : 'var(--line)' } },
+        h('div', { class: 'sched-when' }, ico('send', 16), h('b', null, fmtWhen(it.when)), acc ? h('small', null, acc.name) : null),
+        h('div', { class: 'sched-subject' }, it.subject || '(sans objet)'),
+        h('div', { class: 'sched-to' }, 'À : ' + (it.to || '—') + (it.cc ? ' · Cc : ' + it.cc : '')),
+        it.attachments.length ? h('div', { class: 'sched-att' }, ico('clip', 14), it.attachments.join(', ')) : null,
+        it.error ? h('div', { class: 'notice' }, (it.paused ? 'Envoi suspendu après plusieurs échecs : ' : 'Dernier essai en échec, nouvel essai prévu : ') + it.error) : null,
+        h('div', { class: 'toolbar-row' },
+          h('button', { class: 'primary', on: { click: async (e) => {
+            e.target.disabled = true;
+            try { await call(api.scheduled.sendNow(it.id)); } catch (err) { toast(err.message, { error: true }); }
+            refreshScheduled();
+          } } }, 'Envoyer maintenant'),
+          h('button', { class: 'ghost', on: { click: async () => {
+            const when = await pickSendTime(it.when);
+            if (!when) return;
+            try { await call(api.scheduled.reschedule(it.id, when.toISOString())); toast(`Envoi reprogrammé ${fmtWhen(when)}.`); } catch (err) { toast(err.message, { error: true }); }
+            refreshScheduled();
+          } } }, 'Changer l’heure'),
+          h('button', { class: 'ghost', on: { click: () => reopen(it) } }, 'Modifier'),
+          h('button', { class: 'danger', on: { click: async () => {
+            if (!(await confirmDialog({ title: 'Supprimer ce message programmé ?', body: `« ${it.subject || '(sans objet)'} » ne sera pas envoyé.`, confirm: 'Supprimer', danger: true }))) return;
+            try { await call(api.scheduled.cancel(it.id)); toast('Message programmé supprimé.'); } catch (err) { toast(err.message, { error: true }); }
+            refreshScheduled();
+          } } }, 'Supprimer')));
+    })));
+}
+
+function markAnsweredLocally(r) {
+  const k = `${r.accountId}|${r.folder}|${r.uid}`;
+  let hit = false;
+  state.messages.forEach((m) => { if (keyOf(m) === k) { m.answered = true; hit = true; } });
+  if (hit) renderList();
+}
+
+// ---- courrier indésirable
+const JUNK_RE = /^(junk|spam|junk e-?mail|bulk mail|courrier ind[ée]sirable|ind[ée]sirables?|pourriels?)$/i;
+function junkFolder(accountId) {
+  const info = state.folders[accountId];
+  if (!info) return null;
+  const f = info.folders.find((x) => x.specialUse === '\\Junk') || info.folders.find((x) => JUNK_RE.test(x.name || ''));
+  return f ? f.path : null;
+}
+const isJunkFolder = (accountId, path) => !!path && junkFolder(accountId) === path;
+
+// Indésirable : rangé dans le dossier du courrier indésirable (créé au besoin), avec proposition de règle.
+// « Pas indésirable » : retour dans la boîte de réception.
+async function markJunk(msgs, junk = true) {
+  const byAcc = new Map();
+  msgs.forEach((m) => { if (!byAcc.has(m.accountId)) byAcc.set(m.accountId, []); byAcc.get(m.accountId).push(m); });
+  for (const [accountId, list] of byAcc) {
+    let dest = junk ? junkFolder(accountId) : 'INBOX';
+    if (!dest) {
+      const acc = accountById(accountId);
+      const ok = await confirmDialog({
+        title: 'Pas de dossier « Indésirables »',
+        body: `Le compte ${acc ? acc.name : ''} n’a pas de dossier pour le courrier indésirable. MailHub peut le créer.`,
+        confirm: 'Créer le dossier',
+      });
+      if (!ok) continue;
+      const path = ((state.folders[accountId] || {}).prefix || '') + 'Indésirables';
+      try { await call(api.folders.create(accountId, path)); await loadFolders(accountId); renderSidebar(); } catch (err) { toast(err.message, { error: true }); continue; }
+      dest = junkFolder(accountId) || path;
+    }
+    await fileMessages(list, accountId, dest, { offerRule: junk });
+  }
+}
+
+// ---- conversations : messages regroupés par objet (sans « Re: », « Tr: »…)
+const threadsOn = () => !!state.prefs.threads && state.current.accountId !== 'favorites';
+const normSubject = (s) => String(s || '').replace(/^\s*((re|réf|ref|tr|fwd?|fw|aw|sv|wg)\s*(\[\d+\])?\s*:\s*)+/i, '').replace(/\s+/g, ' ').trim().toLowerCase();
+function threadKeyOf(m) {
+  const n = normSubject(m.subject);
+  return n && n !== '(sans objet)' ? `${m.accountId}|${n}` : 'u|' + keyOf(m);
+}
+// Lignes affichées : un message par conversation (le premier selon le tri), dépliable
+function listView() {
+  if (!threadsOn()) return state.messages.map((m) => ({ m }));
+  const groups = new Map();
+  state.messages.forEach((m) => {
+    const k = threadKeyOf(m);
+    if (!groups.has(k)) groups.set(k, []);
+    groups.get(k).push(m);
+  });
+  const out = [];
+  for (const [key, members] of groups) {
+    if (members.length === 1) { out.push({ m: members[0] }); continue; }
+    const open = state.threadOpen.has(key);
+    out.push({ m: members[0], thread: { key, members, open, unseen: members.filter((x) => !x.seen).length } });
+    if (open) members.slice(1).forEach((x) => out.push({ m: x, child: true }));
+  }
+  return out;
+}
+function toggleThread(key, open) {
+  if (open === undefined ? !state.threadOpen.has(key) : open) state.threadOpen.add(key); else state.threadOpen.delete(key);
+  renderList();
+}
+async function setThreads(on) {
+  try { state.prefs = await call(api.prefs.set({ threads: on })); } catch (err) { toast(err.message, { error: true }); return; }
+  renderList();
 }
 
 // Autocomplétion des destinataires à partir du carnet d'adresses
@@ -2339,7 +2656,7 @@ function openCompose(init = {}) {
 
   // État du brouillon : identifiant (Message-ID), compte où il est rangé, modifications non enregistrées
   let draftId = init.draftId || null;
-  let draftAccount = init.draftId ? init.accountId : null;
+  let draftAccount = init.draftId ? (init.accountOfDraft || init.accountId) : null;
   let draftReplaceable = !!init.draftId;
   let dirty = false;
   let closed = false;
@@ -2567,9 +2884,10 @@ function openCompose(init = {}) {
       const initialHtml = init.bodyHtml
         ? init.bodyHtml
         : (init.body ? esc(init.body).replace(/\n/g, '<br>') : '');
-      // Un brouillon rouvert contient déjà sa signature : on ne la rajoute pas
-      const sigHtml = next && init.kind !== 'draft' ? '<div class="sig-block" data-sig="1"><br><br>' + esc(next).replace(/\n/g, '<br>') + '</div>' : '';
-      editor.innerHTML = initialHtml + sigHtml;
+      // Un brouillon rouvert (ou un envoi annulé) contient déjà sa signature : on ne la rajoute pas
+      const sigHtml = next && !init.keepBody ? '<div class="sig-block" data-sig="1"><br><br>' + esc(next).replace(/\n/g, '<br>') + '</div>' : '';
+      // réponse / transfert : la signature se place entre votre texte et le message cité
+      editor.innerHTML = init.quoteHtml ? '<div><br></div>' + sigHtml + init.quoteHtml : initialHtml + sigHtml;
       currentBlock = next;
       return;
     }
@@ -2591,7 +2909,7 @@ function openCompose(init = {}) {
     sigImgs.appendChild(h('small', null, `${imgs.length} ${plural(imgs.length, 'image', 'images')} de signature, ajoutée${imgs.length > 1 ? 's' : ''} sous la signature à l’envoi :`));
     imgs.forEach((im) => sigImgs.appendChild(h('img', { src: im.dataUrl, alt: im.name, title: im.name })));
   };
-  fillSigSelect(init.kind === 'draft' ? init.signatureId : (accountById(from.value) || {}).defaultSignature);
+  fillSigSelect(init.keepBody ? init.signatureId : (accountById(from.value) || {}).defaultSignature);
   applySig(true);
   drawSigImgs();
   sigSel.addEventListener('change', () => { applySig(false); drawSigImgs(); markDirty(); });
@@ -2599,7 +2917,7 @@ function openCompose(init = {}) {
 
   // Pièces jointes : fichiers de l'ordinateur (files) et pièces reprises d'un message existant (srcAtts :
   // transfert ou brouillon rouvert), relues sur le serveur au moment de l'envoi.
-  let files = [];
+  let files = (init.files || []).map((f) => ({ ...f, size: f.size || (f.dataUrl ? Math.floor((f.dataUrl.length - f.dataUrl.indexOf(',') - 1) * 0.75) : 0) }));
   let srcMsg = init.sourceMsg || null;
   let srcAtts = srcMsg ? (init.sourceList || []).map((a) => ({ index: a.index, filename: a.filename, size: a.size })) : [];
   const attBox = h('div', { class: 'att-list' });
@@ -2617,7 +2935,7 @@ function openCompose(init = {}) {
     html: editor.innerHTML, text: editor.innerText || editor.textContent || '',
     attachments: files,
     sourceAttachments: srcMsg && srcAtts.length ? { ...srcMsg, indexes: srcAtts.map((a) => a.index) } : undefined,
-    inReplyTo: init.inReplyTo, references: init.references,
+    inReplyTo: init.inReplyTo, references: init.references, replyOf: init.replyOf,
     signatureId: sigSel.value || undefined, signatureBlock: currentBlock,
     draftId: draftId || undefined,
   });
@@ -2668,7 +2986,7 @@ function openCompose(init = {}) {
     saveDraft({ silent: true }).catch(() => {});
   }, 30000);
 
-  const title = { reply: 'Répondre', replyAll: 'Répondre à tous', forward: 'Transférer', draft: 'Brouillon' }[init.kind] || 'Nouveau message';
+  const title = { reply: 'Répondre', replyAll: 'Répondre à tous', forward: 'Transférer', draft: 'Brouillon', scheduled: 'Message programmé' }[init.kind] || 'Nouveau message';
 
   // Fermeture (Annuler, Échap, clic à côté) : on propose d'enregistrer ce qui ne l'est pas encore
   const finish = (d) => { closed = true; clearInterval(autosave); d.close(); };
@@ -2702,27 +3020,79 @@ function openCompose(init = {}) {
     });
   };
 
+  const hasRecipient = () => !!(to.value.trim() || cc.value.trim() || bcc.value.trim());
+  // De quoi rouvrir la rédaction à l'identique (envoi annulé ou en échec)
+  const snapshot = (mail, acc) => ({
+    kind: init.kind, keepBody: true, accountId: acc,
+    to: mail.to, cc: mail.cc, bcc: mail.bcc, subject: mail.subject, bodyHtml: mail.html,
+    signatureId: mail.signatureId || '', files: mail.attachments,
+    sourceMsg: srcMsg, sourceList: srcAtts.slice(),
+    inReplyTo: init.inReplyTo, references: init.references, replyOf: init.replyOf,
+    draftId, accountOfDraft: draftAccount,
+  });
+  const afterSent = (mail) => {
+    toast('Message envoyé.');
+    if (mail.replyOf) markAnsweredLocally(mail.replyOf);
+    call(api.contacts.list()).then((c) => { state.contacts = c; }).catch(() => {});
+  };
+
   const sendNow = async (d, btn) => {
-    if (!to.value.trim() && !cc.value.trim() && !bcc.value.trim()) { d.error('Indiquez au moins un destinataire.'); return; }
+    if (!hasRecipient()) { d.error('Indiquez au moins un destinataire.'); return; }
     if (btn) btn.disabled = true;
     d.error('');
     closed = true; // plus de sauvegarde automatique pendant l'envoi
+    if (saving) { try { await saving; } catch (_) { /* ignore */ } }
+    const acc = from.value;
+    const mail = payload();
+    const oldDraft = draftAccount && draftAccount !== acc && draftId ? { accountId: draftAccount, id: draftId } : null;
+    // le brouillon (s'il existe) est supprimé du compte où il est rangé
+    if (oldDraft) delete mail.draftId;
+    const deliver = async () => {
+      await call(api.messages.send(acc, mail));
+      if (oldDraft) call(api.messages.discardDraft(oldDraft.accountId, oldDraft.id)).catch(() => {});
+      afterSent(mail);
+    };
+    const delay = undoDelay();
+    if (!delay) {
+      try {
+        await deliver();
+        clearInterval(autosave);
+        d.close();
+      } catch (err) { closed = false; if (btn) btn.disabled = false; d.error(err.message); }
+      return;
+    }
+    // Envoi différé de quelques secondes : « Annuler » rouvre le message tel quel
+    clearInterval(autosave);
+    d.close();
+    const snap = snapshot(mail, acc);
+    queueSend({
+      delay,
+      run: deliver,
+      label: mail.subject || '(sans objet)',
+      reopen: () => openCompose(snap),
+    });
+  };
+
+  // Envoi programmé : le message part à la date choisie, même si la fenêtre est fermée
+  const sendLater = async (d, btn) => {
+    if (!hasRecipient()) { d.error('Indiquez au moins un destinataire.'); return; }
+    const when = await pickSendTime();
+    if (!when) return;
+    btn.disabled = true;
+    d.error('');
+    closed = true;
     try {
       if (saving) { try { await saving; } catch (_) { /* ignore */ } }
+      const acc = from.value;
       const mail = payload();
-      // le brouillon (s'il existe) est supprimé du compte où il est rangé
-      if (draftAccount && draftAccount !== from.value) delete mail.draftId;
-      await call(api.messages.send(from.value, mail));
-      if (draftAccount && draftAccount !== from.value && draftId) call(api.messages.discardDraft(draftAccount, draftId)).catch(() => {});
+      delete mail.draftId; // le brouillon est retiré tout de suite (le message programmé garde ses pièces jointes)
+      await call(api.scheduled.add(acc, mail, when.toISOString()));
+      if (draftId && draftAccount) call(api.messages.discardDraft(draftAccount, draftId)).catch(() => {});
       clearInterval(autosave);
       d.close();
-      toast('Message envoyé.');
-      if (init.replyOf) {
-        const r = init.replyOf;
-        call(api.messages.flag(r.accountId, r.folder, [r.uid], 'answered', true)).catch(() => {});
-      }
-      call(api.contacts.list()).then((c) => { state.contacts = c; }).catch(() => {});
-    } catch (err) { closed = false; if (btn) btn.disabled = false; d.error(err.message); }
+      toast(`Envoi programmé ${fmtWhen(when)}.`);
+      refreshScheduled();
+    } catch (err) { closed = false; btn.disabled = false; d.error(err.message); }
   };
 
   const dlg = openDialog({
@@ -2753,6 +3123,7 @@ function openCompose(init = {}) {
           try { await saveDraft(); } catch (err) { d.error(err.message); }
           btn.disabled = false;
         } },
+      { id: 'later', label: 'Envoyer plus tard…', onClick: (d, btn) => sendLater(d, btn) },
       { id: 'send', label: 'Envoyer', kind: 'primary', onClick: (d, btn) => sendNow(d, btn) },
     ],
   });
@@ -3013,6 +3384,17 @@ async function renderSettingsPanel() {
         applySizes();
       } } })),
     h('p', { class: 'lead', style: 'margin:8px 0 0' }, 'Ce choix est aussi disponible en haut de la liste des messages. Un double-clic sur un message l’ouvre en plein écran, quelle que soit la disposition (en mode plein écran, un simple clic sélectionne seulement).'),
+    h('h3', null, 'Envoi'),
+    h('div', { class: 'seg' },
+      [[0, 'Immédiat'], [5, '5 s'], [10, '10 s'], [20, '20 s'], [30, '30 s']].map(([v, label]) => h('button', {
+        class: undoDelay() === v ? 'on' : '',
+        on: { click: async () => { state.prefs = await call(api.prefs.set({ undoSendDelay: v })); renderSettingsPanel(); } },
+      }, label))),
+    h('p', { class: 'lead', style: 'margin:8px 0 0' }, 'Délai pendant lequel « Annuler l’envoi » reste possible après avoir cliqué sur Envoyer. « Envoyer plus tard… » (dans la rédaction) programme un envoi à une date précise.'),
+    h('h3', null, 'Liste des messages'),
+    h('label', { class: 'check' },
+      h('input', { type: 'checkbox', checked: !!state.prefs.threads, on: { change: (e) => setThreads(e.target.checked) } }),
+      h('span', null, 'Regrouper les messages par conversation (même objet, sans « Re: » ni « Tr: »). Aussi disponible au-dessus de la liste.')),
     h('h3', null, 'Contenu distant (images des e-mails)'),
     h('div', { class: 'seg' },
       [['ask', 'Demander à chaque message'], ['always', 'Toujours afficher']].map(([v, label]) => h('button', {
@@ -3714,6 +4096,23 @@ $('#search').addEventListener('input', debounce((e) => {
   loadMessages();
 }, 350));
 
+// Clic sur une notification : ouvre le message (ou la boîte de réception du compte)
+api.on('app:open', async ({ accountId, folder, uid }) => {
+  if (!accountById(accountId)) return;
+  await selectFolder(accountId, folder || 'INBOX');
+  if (!uid) return;
+  const found = state.messages.find((x) => x.uid === uid);
+  const m = found || { accountId, folder: folder || 'INBOX', uid, subject: '', from: '', fromName: '', to: '', date: new Date().toISOString(), seen: false };
+  selectOnly(m);
+  if (!found || layoutPref() === 'full') { renderList(); openInTab(m); } else openMessage(m);
+});
+
+api.on('mail:scheduled', ({ kind, item }) => {
+  if (kind === 'sent') toast(`Message programmé envoyé : « ${item.subject || '(sans objet)'} ».`);
+  else if (kind === 'failed') toast(`Envoi programmé en échec : ${item.error}`, { error: true, actions: [{ label: 'Voir', onClick: () => showPanel('scheduled') }] });
+  refreshScheduled();
+});
+
 api.on('app:closeTab', () => {
   if (state.tab !== 'list') closeActiveTab();
   else api.app.hide();
@@ -3741,22 +4140,35 @@ document.addEventListener('keydown', (e) => {
   }
   if (e.key === 'Escape') return;
   const selKeys = [...state.sel];
-  const idx = state.opened ? state.messages.findIndex((m) => keyOf(m) === keyOf(state.opened.msg))
-    : (selKeys.length === 1 ? state.messages.findIndex((m) => keyOf(m) === selKeys[0]) : -1);
+  const view = listView();
+  const shown = view.map((r) => r.m);
+  const idx = state.opened ? shown.findIndex((m) => keyOf(m) === keyOf(state.opened.msg))
+    : (selKeys.length === 1 ? shown.findIndex((m) => keyOf(m) === selKeys[0]) : -1);
+  // conversations : → déplie, ← replie
+  if ((e.key === 'ArrowRight' || e.key === 'ArrowLeft') && idx >= 0 && threadsOn()) {
+    const r = view[idx];
+    const key = threadKeyOf(r.m);
+    if (r.thread || r.child) { e.preventDefault(); toggleThread(key, e.key === 'ArrowRight'); if (r.child && e.key === 'ArrowLeft') { const head = listView().find((x) => x.thread && x.thread.key === key); if (head) { selectOnly(head.m); renderList(); } } return; }
+  }
+  if (e.key === 'J' && e.shiftKey) {
+    const sel = selectedMessages();
+    if (sel.length) { e.preventDefault(); markJunk(sel, !sel.every((m) => isJunkFolder(m.accountId, m.folder))); }
+    return;
+  }
   if (e.key === 'Enter' && selKeys.length === 1) {
-    const m = state.messages[idx];
+    const m = shown[idx];
     if (m) { e.preventDefault(); onRowDblClick(m); return; }
   }
   if (e.key === 's' && selKeys.length) { e.preventDefault(); const sel = selectedMessages(); const on = !sel.every((m) => m.flagged); sel.forEach((m) => { if (!!m.flagged !== on) toggleFlag(m); }); return; }
   const go = (i) => {
-    const m = state.messages[i];
+    const m = shown[i];
     if (!m) return;
     selectOnly(m);
     if (layoutPref() === 'full') renderList(); else openMessage(m);
     const row = $('#list-rows').children[i];
     if (row && row.scrollIntoView) row.scrollIntoView({ block: 'nearest' });
   };
-  if (e.key === 'j' || e.key === 'ArrowDown') { e.preventDefault(); go(Math.min(idx + 1, state.messages.length - 1)); }
+  if (e.key === 'j' || e.key === 'ArrowDown') { e.preventDefault(); go(Math.min(idx + 1, shown.length - 1)); }
   else if (e.key === 'k' || e.key === 'ArrowUp') { e.preventDefault(); go(Math.max(idx - 1, 0)); }
   else if (e.key === 'Delete' || e.key === 'Backspace' || e.key === '#') {
     const sel = selectedMessages();
@@ -3800,6 +4212,8 @@ window.addEventListener('unhandledrejection', (e) => {
   $('#btn-sortnow').addEventListener('click', sortNow);
   $('#sort-by').addEventListener('change', (e) => setSort(e.target.value, e.target.value === 'date' ? 'desc' : 'asc'));
   $('#sort-dir').addEventListener('click', () => setSort(sortBy(), sortDir() === 'asc' ? 'desc' : 'asc'));
+  $('#btn-threads').append(ico('layers', 16));
+  $('#btn-threads').addEventListener('click', () => setThreads(!state.prefs.threads));
   renderReader();
 
   try {
@@ -3821,6 +4235,7 @@ window.addEventListener('unhandledrejection', (e) => {
   }
   renderSidebar();
   updateTitle();
+  refreshScheduled();
   await Promise.all(state.accounts.map((a) => loadFolders(a.id)));
   await loadMessages();
 })();

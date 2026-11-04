@@ -79,6 +79,15 @@ contextBridge.exposeInMainWorld('mailhub', {
     duplicates: (items) => invoke('rules:duplicates', items),
   },
 
+  // envoi programmé
+  scheduled: {
+    list: () => invoke('scheduled:list'),
+    add: (accountId, mail, when) => invoke('scheduled:add', accountId, mail, when),
+    cancel: (id) => invoke('scheduled:cancel', id),
+    sendNow: (id) => invoke('scheduled:sendNow', id),
+    reschedule: (id, when) => invoke('scheduled:reschedule', id, when),
+  },
+
   signatures: {
     pickImage: () => invoke('signatures:pickImage'),
   },
@@ -121,7 +130,7 @@ contextBridge.exposeInMainWorld('mailhub', {
 
   // événements poussés par le processus principal
   on: (channel, callback) => {
-    const allowed = ['mail:sorted', 'mail:new', 'mail:changed', 'account:status', 'app:error', 'app:closeTab', 'app:updateAvailable', 'app:updateDownloaded'];
+    const allowed = ['mail:sorted', 'mail:new', 'mail:changed', 'account:status', 'app:error', 'app:closeTab', 'app:updateAvailable', 'app:updateDownloaded', 'app:open', 'mail:scheduled'];
     if (!allowed.includes(channel)) return () => {};
     const listener = (_event, payload) => callback(payload);
     ipcRenderer.on(channel, listener);

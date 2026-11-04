@@ -9,8 +9,9 @@ const {
 const { Store } = require('./src/store');
 const { ImapManager, friendlyError } = require('./src/imap');
 const rulesio = require('./src/rulesio');
-const { attachmentPreview } = require('./src/attachment');
+const { attachmentPreview, safeOutgoing } = require('./src/attachment');
 const { cleanImage } = require('./src/signature');
+const { Scheduler } = require('./src/scheduler');
 const tb = require('./src/thunderbird');
 
 let autoUpdater = null;
@@ -24,6 +25,25 @@ let manager = null;
 let tray = null;
 let quitting = false;
 let hintShown = false;
+let scheduler = null;
+
+// Sécurité : seuls les fichiers que l'utilisateur a choisis lui-même (fenêtre « Joindre ») peuvent être
+// lus sur le disque. Tout autre chemin transmis par l'interface est ignoré ; un fichier glissé-déposé
+// arrive déjà avec son contenu (dataUrl).
+const pickedFiles = new Set();
+const safeMail = (mail) => safeOutgoing(mail, pickedFiles, (p) => { try { return fs.statSync(p).size; } catch (_) { return null; } });
+
+// Pour un envoi programmé, les fichiers sont copiés dans le message (ils peuvent être déplacés d'ici là)
+function embedFiles(mail) {
+  return {
+    ...mail,
+    attachments: mail.attachments.map((a) => {
+      if (!a.path) return a;
+      const mime = a.contentType || 'application/octet-stream';
+      return { name: a.name, contentType: a.contentType, dataUrl: `data:${mime};base64,${fs.readFileSync(a.path).toString('base64')}` };
+    }),
+  };
+}
 
 // Lancé à l'ouverture de session : on démarre sans fenêtre, le tri tourne en arrière-plan
 const startHidden = process.argv.includes('--hidden');
@@ -244,7 +264,7 @@ function registerIpc() {
   handle('messages:markAllRead', (accountId, folder) => manager.markAllRead(accountId, folder));
   handle('messages:markAllReadInAccount', (accountId) => manager.markAllReadInAccount(accountId));
   handle('messages:deleteAllInFolder', (accountId, folder) => manager.deleteAllInFolder(accountId, folder));
-  handle('messages:saveDraft', (accountId, mail) => manager.saveDraft(accountId, mail));
+  handle('messages:saveDraft', (accountId, mail) => manager.saveDraft(accountId, safeMail(mail)));
   handle('messages:discardDraft', (accountId, draftId) => manager.discardDraft(accountId, draftId));
 
   // Boîte de réception unifiée : fusion des boîtes de tous les comptes
@@ -304,15 +324,27 @@ function registerIpc() {
   handle('messages:pickAttachments', async () => {
     const { canceled, filePaths } = await dialog.showOpenDialog(mainWindow, { properties: ['openFile', 'multiSelections'] });
     if (canceled) return [];
+    filePaths.forEach((p) => pickedFiles.add(p));
     return filePaths.map((p) => ({ path: p, name: path.basename(p), size: fs.statSync(p).size }));
   });
 
-  handle('messages:send', async (accountId, mail) => {
-    const res = await manager.send(accountId, mail);
-    // le carnet d'adresses retient tous les destinataires (À, Cc, Cci)
-    try { store.recordContacts(ImapManager.parseRecipients(mail.to, mail.cc, mail.bcc)); } catch (e) { console.error('Carnet :', e.message); }
-    return res;
+  handle('messages:send', (accountId, mail) => sendMail(accountId, safeMail(mail)));
+
+  // ---- envoi programmé
+  handle('scheduled:list', () => scheduler.list());
+  handle('scheduled:add', async (accountId, mail, when) => {
+    const m = embedFiles(safeMail(mail));
+    // pièces jointes reprises d'un message (transfert, brouillon) : copiées maintenant, l'original peut disparaître
+    if (m.sourceAttachments) {
+      const extra = await manager._sourceAttachments(m.sourceAttachments);
+      m.attachments.push(...extra.map((a) => ({ name: a.filename, contentType: a.contentType, dataUrl: `data:${a.contentType || 'application/octet-stream'};base64,${a.content.toString('base64')}` })));
+      delete m.sourceAttachments;
+    }
+    return scheduler.add(accountId, m, when);
   });
+  handle('scheduled:cancel', (id) => scheduler.cancel(id));
+  handle('scheduled:sendNow', (id) => scheduler.sendNow(id));
+  handle('scheduled:reschedule', (id, when) => scheduler.reschedule(id, when));
 
   // Signatures : choix d'une image (png, jpg, gif, webp ; 1,5 Mo maximum)
   handle('signatures:pickImage', async () => {
@@ -552,6 +584,16 @@ function registerIpc() {
   });
 }
 
+async function sendMail(accountId, mail) {
+  const res = await manager.send(accountId, mail);
+  // réponse : le message d'origine est marqué « répondu »
+  const r = mail.replyOf;
+  if (r && r.accountId && r.folder && r.uid) manager.setFlag(r.accountId, r.folder, [r.uid], 'answered', true).catch(() => {});
+  // le carnet d'adresses retient tous les destinataires (À, Cc, Cci)
+  try { store.recordContacts(ImapManager.parseRecipients(mail.to, mail.cc, mail.bcc)); } catch (e) { console.error('Carnet :', e.message); }
+  return res;
+}
+
 function wireManagerEvents() {
   const accountName = (id) => {
     const a = store.listAccounts().find((x) => x.id === id);
@@ -577,7 +619,11 @@ function wireManagerEvents() {
         : `${messages.length} nouveaux messages · ${accountName(accountId)}`;
       const body = messages.length === 1 ? first.subject : messages.slice(0, 3).map((m) => m.subject).join('\n');
       const n = new Notification({ title, body });
-      n.on('click', () => { if (mainWindow) { mainWindow.show(); mainWindow.focus(); } });
+      // clic : ouvre le message (un seul) ou la boîte de réception du compte
+      n.on('click', () => {
+        showWindow();
+        send('app:open', { accountId, folder: 'INBOX', uid: messages.length === 1 ? first.uid : null });
+      });
       n.show();
     }
   });
@@ -602,6 +648,15 @@ app.whenReady().then(() => {
 
   // Surveillance IMAP (IDLE) + tri automatique des nouveaux messages
   store.listAccounts().forEach((acc) => manager.startWatching(acc.id));
+
+  // Envoi programmé : vérification toutes les 30 s
+  scheduler = new Scheduler(store, sendMail, (kind, item) => {
+    send('mail:scheduled', { kind, item });
+    if (kind === 'failed' && Notification.isSupported()) {
+      new Notification({ title: 'Envoi programmé en échec', body: `« ${item.subject || '(sans objet)'} » : ${item.error}${item.paused ? ' (envoi suspendu)' : ' (nouvel essai dans quelques minutes)'}` }).show();
+    }
+  });
+  scheduler.start();
 
   initAutoUpdater();
 

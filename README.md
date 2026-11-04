@@ -28,7 +28,7 @@ automatiquement les nouveaux messages dans vos dossiers.
 - **Thème Graphite** (gris/noir neutre) en plus d'Automatique, Clair et Sombre.
 - **Anciens messages chargés automatiquement** : il suffit de faire défiler la liste, le lot suivant arrive tout seul (plus de bouton).
 - **Signatures multiples** par compte (Réglages → Signatures…), avec une signature par défaut et des **images ou GIF** (logo…, 1,5 Mo maximum chacune ; le message part alors en HTML) ; une liste « Signature » dans la rédaction permet d'en changer.
-- Les réponses reprennent le message d'origine **sans « > »**.
+- Les réponses reprennent le message d'origine **avec sa mise en forme**, dans un bloc cité (sans « > ») ; votre signature se place entre votre texte et la citation. Les images distantes du message cité ne sont chargées que si vous les aviez autorisées.
 - **Règles de tri** modifiables, avec ordre de priorité (la première règle qui correspond s'applique ; boutons « Appliquer plus tôt / plus tard ») : expéditeur, destinataire, objet ou domaine, avec « toutes les conditions » ou « au moins une ».
 - **Surveillance en temps réel** (IMAP IDLE) : les nouveaux messages sont triés dès leur arrivée. Le courrier reçu pendant que l'application était fermée est trié au démarrage suivant.
 - Lecture HTML sécurisée, pièces jointes, recherche, étoile, lu / non lu, suppression (vers la corbeille), réponse, transfert et envoi de messages (SMTP).
@@ -39,8 +39,17 @@ automatiquement les nouveaux messages dans vos dossiers.
 - **Brouillons** : enregistrement manuel (`Ctrl/Cmd+S` ou bouton) et **automatique toutes les 30 secondes** ; chaque enregistrement remplace la version précédente (pas de doublons). Dans « Brouillons », un double-clic (ou `Entrée`, ou « Continuer l'écriture ») rouvre le brouillon avec ses destinataires, sa mise en forme et ses pièces jointes ; il est supprimé une fois envoyé. Échap ou un clic à côté de la fenêtre ne ferment plus un message sans demander.
 - **Transfert avec pièces jointes** : les pièces jointes d'origine sont reprises (retirables une à une).
 - **Copie cachée (Cci)** dans la rédaction.
+- **Annuler l'envoi** : après « Envoyer », le message attend quelques secondes (5 s par défaut, réglable dans Réglages → Envoi) ; « Annuler l'envoi » rouvre la rédaction à l'identique.
+- **Envoyer plus tard** : bouton « Envoyer plus tard… » dans la rédaction (dans 1 heure, demain 8 h, lundi 8 h, ou date précise). Les messages en attente sont listés dans « Envoi programmé » (barre latérale) : envoyer maintenant, changer l'heure, modifier, supprimer. Si MailHub est fermé à l'heure prévue, le message part au démarrage suivant ; en cas d'échec, nouvel essai automatique (5 au maximum).
+- **Conversations** : bouton au-dessus de la liste (ou Réglages) pour regrouper les messages d'un même échange (même objet, sans « Re: »/« Tr: »). Le chevron (ou `→` / `←`) déplie et replie ; une conversation repliée et sélectionnée est rangée ou supprimée en entier.
+- **Icône « répondu »** dans la liste pour les messages auxquels vous avez répondu.
+- **Indésirable** : bouton dans le message, clic droit, barre de sélection ou `Maj+J` ; le message part dans le dossier du courrier indésirable (créé au besoin) et MailHub propose de toujours y ranger cet expéditeur. Depuis ce dossier, « Pas indésirable » le remet dans la boîte de réception.
+- **Recherche dans le contenu** des messages, en plus de l'expéditeur, du destinataire et de l'objet.
+- **Notifications** : un clic ouvre directement le nouveau message (ou la boîte de réception du compte s'il y en a plusieurs).
+- **Plus rapide** : un dossier déjà consulté s'affiche immédiatement (liste gardée en cache, mise à jour en arrière-plan) et un message déjà ouvert ne se retélécharge pas.
+- **Sécurité** : MailHub ne joint que les fichiers que vous avez vous-même choisis ou glissés (35 Mo au total au maximum).
 
-Raccourcis : `j` / `k` (message suivant / précédent), `m` (ranger), `r` (répondre), `a` (répondre à tous), `f` (transférer), `u` (lu / non lu), `Suppr` (supprimer). Dans la rédaction : `Ctrl/Cmd+Entrée` (envoyer), `Ctrl/Cmd+S` (enregistrer le brouillon).
+Raccourcis : `j` / `k` (message suivant / précédent), `m` (ranger), `r` (répondre), `a` (répondre à tous), `f` (transférer), `u` (lu / non lu), `Maj+J` (indésirable), `→` / `←` (déplier / replier une conversation), `Suppr` (supprimer). Dans la rédaction : `Ctrl/Cmd+Entrée` (envoyer), `Ctrl/Cmd+S` (enregistrer le brouillon).
 
 ## Installer l'application
 

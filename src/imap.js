@@ -59,6 +59,7 @@ function summarize(msg) {
     size: msg.size || 0,
     seen: flags.has('\\Seen'),
     flagged: flags.has('\\Flagged'),
+    answered: flags.has('\\Answered'),
     hasAttachment: hasAttachment(msg.bodyStructure),
   };
 }
@@ -88,6 +89,20 @@ function inlineCids(html, attachments) {
     }
   }
   return out;
+}
+
+// En-têtes propres à MailHub dans un brouillon : signature choisie et message auquel on répond
+function draftHeaders(mail) {
+  const h = {};
+  if (mail.signatureId) h['X-MailHub-Signature'] = String(mail.signatureId).slice(0, 64);
+  const r = mail.replyOf;
+  if (r && r.accountId && r.folder && r.uid) h['X-MailHub-Reply-Of'] = [r.accountId, encodeURIComponent(r.folder), Number(r.uid)].join(' ');
+  return Object.keys(h).length ? h : undefined;
+}
+function parseReplyOf(v) {
+  const parts = String(v || '').trim().split(/\s+/);
+  if (parts.length !== 3 || !/^\d+$/.test(parts[2])) return null;
+  try { return { accountId: parts[0], folder: decodeURIComponent(parts[1]), uid: Number(parts[2]) }; } catch (_) { return null; }
 }
 
 const MAIL_PARSE_LIMIT = 25 * 1024 * 1024; // sécurité : on n'ouvre pas de message > 25 Mo
@@ -159,6 +174,31 @@ class ImapManager extends EventEmitter {
     this.ops = new Map(); // accountId -> Promise<ImapFlow>
     this.watchers = new Map(); // accountId -> watcher
     this.processing = new Map(); // accountId -> { running, again }
+    this.details = new Map(); // cache des messages déjà ouverts : « compte|dossier|uid » -> contenu
+  }
+
+  // ---- cache des messages ouverts (rouvrir un message ne le retélécharge pas) ----
+  _cacheGet(accountId, folder, uid) {
+    const k = `${accountId}|${folder}|${uid}`;
+    const v = this.details.get(k);
+    if (v) { this.details.delete(k); this.details.set(k, v); } // le plus récent en dernier
+    return v;
+  }
+
+  _cacheSet(accountId, folder, uid, detail) {
+    const weight = (detail.html ? detail.html.length : 0) + (detail.text ? detail.text.length : 0);
+    if (weight > 3 * 1024 * 1024) return; // les gros messages ne sont pas gardés en mémoire
+    this.details.set(`${accountId}|${folder}|${uid}`, detail);
+    while (this.details.size > 150) this.details.delete(this.details.keys().next().value);
+  }
+
+  // Oublie des messages déplacés ou supprimés (uids absent : tout le dossier ; folder absent : tout le compte)
+  _cacheDrop(accountId, folder, uids) {
+    const set = uids ? new Set(uids.map(String)) : null;
+    for (const k of [...this.details.keys()]) {
+      const [a, f, u] = k.split('|');
+      if (a === accountId && (!folder || f === folder) && (!set || set.has(u))) this.details.delete(k);
+    }
   }
 
   // ---- connexions -----------------------------------------------------------
@@ -326,6 +366,7 @@ class ImapManager extends EventEmitter {
   }
 
   async deleteAllInFolder(accountId, folder) {
+    this._cacheDrop(accountId, folder);
     return this.withMailbox(accountId, folder, async (client) => {
       const found = await client.search({ all: true }, { uid: true });
       if (found && found.length) {
@@ -364,10 +405,15 @@ class ImapManager extends EventEmitter {
 
   async searchMessages(accountId, folder, query, limit = 100) {
     return this.withMailbox(accountId, folder, async (client) => {
-      const uids = await client.search(
-        { or: [{ subject: query }, { from: query }, { to: query }] },
-        { uid: true }
-      );
+      // objet, expéditeur, destinataire… et contenu du message (BODY)
+      let uids;
+      try {
+        uids = await client.search({ or: [{ subject: query }, { from: query }, { to: query }, { body: query }] }, { uid: true });
+      } catch (_) {
+        uids = null;
+      }
+      // certains serveurs refusent la recherche dans le contenu : on se rabat sur les en-têtes
+      if (!uids) uids = await client.search({ or: [{ subject: query }, { from: query }, { to: query }] }, { uid: true });
       if (!uids || !uids.length) return { messages: [], total: 0 };
       const picked = uids.slice(-limit);
       const out = [];
@@ -390,6 +436,19 @@ class ImapManager extends EventEmitter {
   }
 
   async getMessage(accountId, folder, uid, { markSeen = true } = {}) {
+    const cached = this._cacheGet(accountId, folder, uid);
+    if (cached) {
+      if (markSeen) {
+        this.setFlag(accountId, folder, [uid], 'seen', true).catch(() => {});
+      }
+      return cached;
+    }
+    const detail = await this._getMessage(accountId, folder, uid, { markSeen });
+    this._cacheSet(accountId, folder, uid, detail);
+    return detail;
+  }
+
+  async _getMessage(accountId, folder, uid, { markSeen = true } = {}) {
     return this.withMailbox(accountId, folder, async (client) => {
       const { parsed, flags } = await this._fetchParsed(client, uid);
       if (markSeen && !flags.has('\\Seen')) {
@@ -412,6 +471,7 @@ class ImapManager extends EventEmitter {
         draft: flags.has('\\Draft'),
         answered: flags.has('\\Answered'),
         signatureId: String((parsed.headers && parsed.headers.get('x-mailhub-signature')) || ''),
+        replyOf: parseReplyOf(parsed.headers && parsed.headers.get('x-mailhub-reply-of')),
         date: isoDate(parsed.date),
         html,
         text: parsed.text || '',
@@ -450,6 +510,7 @@ class ImapManager extends EventEmitter {
   }
 
   async moveMessages(accountId, folder, uids, dest) {
+    this._cacheDrop(accountId, folder, uids);
     return this.withMailbox(accountId, folder, async (client) => {
       const res = await client.messageMove(uids.join(','), dest, { uid: true });
       if (!res) throw new Error(`Le serveur a refusé le déplacement vers « ${dest} » (dossier introuvable ?).`);
@@ -458,6 +519,7 @@ class ImapManager extends EventEmitter {
   }
 
   async deleteMessages(accountId, folder, uids) {
+    this._cacheDrop(accountId, folder, uids);
     const client = await this._ops(accountId);
     const trash = await this._findSpecial(client, '\\Trash', /^(trash|corbeille|deleted|éléments supprimés|bin)$/i);
     return this.withMailbox(accountId, folder, async (c) => {
@@ -833,6 +895,7 @@ class ImapManager extends EventEmitter {
     if (!drafts || !draftId) return { deleted: 0 };
     const uids = await this._draftUids(accountId, drafts, draftId);
     if (!uids.length) return { deleted: 0 };
+    this._cacheDrop(accountId, drafts, uids);
     await this.withMailbox(accountId, drafts, (client) => client.messageDelete(uids.join(','), { uid: true }));
     this.emit('changed', { accountId, folder: drafts });
     return { deleted: uids.length };
@@ -858,7 +921,7 @@ class ImapManager extends EventEmitter {
       messageId: draftId,
       inReplyTo: mail.inReplyTo || undefined,
       references: mail.references && mail.references.length ? mail.references : undefined,
-      headers: mail.signatureId ? { 'X-MailHub-Signature': String(mail.signatureId).slice(0, 64) } : undefined,
+      headers: draftHeaders(mail),
       attachments: [...normalizeAttachments(mail.attachments), ...(await this._sourceAttachments(mail.sourceAttachments))],
     };
 
@@ -884,6 +947,7 @@ class ImapManager extends EventEmitter {
     // On ne retire l'ancienne version que si la nouvelle est bien identifiée
     const stale = previous.filter((u) => u !== uid);
     if (uid && stale.length) {
+      this._cacheDrop(accountId, drafts, stale);
       try {
         await this.withMailbox(accountId, drafts, (c) => c.messageDelete(stale.join(','), { uid: true }));
       } catch (err) { console.error('Ancienne version du brouillon non supprimée :', err.message); }

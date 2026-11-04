@@ -12,6 +12,7 @@ const { attachmentPreview } = require('./src/attachment');
 const { cleanImage, buildSignedMessage } = require('./src/signature');
 const tb = require('./src/thunderbird');
 const { findRule, senderRule, upsertSenderRule } = require('./src/rules');
+const { Scheduler } = require('./src/scheduler');
 
 const PORT = 3000;
 const HOST = '0.0.0.0';
@@ -607,12 +608,14 @@ async function handleChannel(channel, args) {
     const [accountId, folder, query] = args;
     const q = String(query || '').toLowerCase().trim();
     const msgs = (demoStore.messages[accountId] || []).filter((m) => (folder ? m.folder === folder : true));
-    return msgs.filter((m) =>
+    const found = msgs.filter((m) =>
       (m.subject && m.subject.toLowerCase().includes(q)) ||
       (m.from && m.from.toLowerCase().includes(q)) ||
       (m.fromName && m.fromName.toLowerCase().includes(q)) ||
-      (m.text && m.text.toLowerCase().includes(q))
+      (m.text && m.text.toLowerCase().includes(q)) ||
+      (m.html && String(m.html).replace(/<[^>]*>/g, ' ').toLowerCase().includes(q))
     );
+    return { messages: found, total: found.length };
   }
 
   if (channel === 'messages:get') {
@@ -640,6 +643,7 @@ async function handleChannel(channel, args) {
       draft: found.folder === 'Drafts',
       answered: !!found.answered,
       signatureId: found.signatureId || '',
+      replyOf: found.replyOf || null,
       date: found.date,
       html: found.html,
       text: found.text,
@@ -766,6 +770,10 @@ async function handleChannel(channel, args) {
     if (!demoStore.messages[accountId]) demoStore.messages[accountId] = [];
     demoStore.messages[accountId].unshift(newMsg);
     if (mail.draftId) demoDiscardDraft(accountId, mail.draftId);
+    if (mail.replyOf) {
+      const orig = (demoStore.messages[mail.replyOf.accountId] || []).find((m) => m.uid === Number(mail.replyOf.uid) && m.folder === mail.replyOf.folder);
+      if (orig) orig.answered = true;
+    }
     saveDemoStore();
 
     // Record contacts
@@ -849,6 +857,7 @@ async function handleChannel(channel, args) {
       inReplyTo: mail.inReplyTo || '',
       references: mail.references || [],
       signatureId: mail.signatureId || '',
+      replyOf: mail.replyOf || null,
       subject: mail.subject || '(sans objet)',
       from: acc.email,
       fromName: acc.name,
@@ -1115,12 +1124,32 @@ async function handleChannel(channel, args) {
     return null;
   }
 
+  // ---- envoi programmé
+  if (channel === 'scheduled:list') return scheduler.list();
+  if (channel === 'scheduled:add') {
+    const m = { ...args[1] };
+    if (m.sourceAttachments) {
+      m.attachments = [...(m.attachments || []), ...demoSourceAttachments(m.sourceAttachments).map((x) => ({
+        name: x.filename, contentType: x.contentType, dataUrl: `data:${x.contentType || 'application/octet-stream'};base64,${x.contentBase64 || ''}`,
+      }))];
+      delete m.sourceAttachments;
+    }
+    return scheduler.add(args[0], m, args[2]);
+  }
+  if (channel === 'scheduled:cancel') return scheduler.cancel(args[0]);
+  if (channel === 'scheduled:sendNow') return scheduler.sendNow(args[0]);
+  if (channel === 'scheduled:reschedule') return scheduler.reschedule(args[0], args[1]);
+
   if (channel === 'app:hide') {
     return true;
   }
 
   throw new Error(`Canal inconnu : ${channel}`);
 }
+
+const scheduler = new Scheduler(store, (accountId, mail) => handleChannel('messages:send', [accountId, mail]),
+  (kind, item) => broadcast('mail:scheduled', { kind, item }));
+scheduler.start();
 
 // REST IPC Endpoint
 app.post('/api/ipc', async (req, res) => {
