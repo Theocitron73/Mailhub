@@ -1,6 +1,6 @@
 {
   "name": "mailhub",
-  "version": "1.3.0",
+  "version": "1.3.1",
   "description": "MailHub - messagerie multi-comptes IMAP avec tri automatique",
   "main": "main.js",
   "author": "MailHub",
@@ -51,6 +51,7 @@
       "src/**/*",
       "renderer/**/*",
       "build/icon.*",
+      "build/tray.png",
       "package.json"
     ],
     "win": {
@@ -60,7 +61,7 @@
           "arch": ["x64"]
         }
       ],
-      "icon": "build/icon.png"
+      "icon": "build/icon.ico"
     },
     "nsis": {
       "oneClick": false,
@@ -73,6 +74,7 @@
     },
     "mac": {
       "category": "public.app-category.productivity",
+      "icon": "build/icon.icns",
       "identity": null,
       "forceCodeSigning": false,
       "target": [

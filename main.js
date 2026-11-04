@@ -81,6 +81,7 @@ function createWindow() {
     show: !startHidden,
     title: 'MailHub',
     backgroundColor: '#0f1117',
+    icon: path.join(__dirname, 'build', process.platform === 'win32' ? 'icon.ico' : 'icon.png'),
     titleBarStyle: process.platform === 'darwin' ? 'hiddenInset' : 'default',
     trafficLightPosition: { x: 16, y: 16 },
     webPreferences: {
@@ -142,7 +143,7 @@ function showWindow() {
 function createTray() {
   if (process.platform === 'darwin') return; // le Dock suffit sur macOS
   try {
-    const image = nativeImage.createFromPath(path.join(__dirname, 'build', 'icon.png')).resize({ width: 18, height: 18 });
+    const image = nativeImage.createFromPath(path.join(__dirname, 'build', 'tray.png')).resize({ width: 18, height: 18 });
     tray = new Tray(image);
     tray.setToolTip('MailHub');
     tray.setContextMenu(Menu.buildFromTemplate([
