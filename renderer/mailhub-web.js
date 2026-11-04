@@ -146,6 +146,7 @@
       markAllReadInAccount: (accountId) => invoke('messages:markAllReadInAccount', accountId),
       deleteAllInFolder: (accountId, folder) => invoke('messages:deleteAllInFolder', accountId, folder),
       saveDraft: (accountId, mail) => invoke('messages:saveDraft', accountId, mail),
+      discardDraft: (accountId, draftId) => invoke('messages:discardDraft', accountId, draftId),
       flagged: () => invoke('messages:flagged'),
       pickAttachments: () => {
         return new Promise((resolve) => {
@@ -215,6 +216,14 @@
       duplicates: (items) => invoke('rules:duplicates', items),
     },
 
+    scheduled: {
+      list: () => invoke('scheduled:list'),
+      add: (accountId, mail, when) => invoke('scheduled:add', accountId, mail, when),
+      cancel: (id) => invoke('scheduled:cancel', id),
+      sendNow: (id) => invoke('scheduled:sendNow', id),
+      reschedule: (id, when) => invoke('scheduled:reschedule', id, when),
+    },
+
     signatures: {
       pickImage: () => {
         return new Promise((resolve) => {
@@ -253,6 +262,12 @@
 
     app: {
       hide: () => Promise.resolve({ ok: true, data: true }),
+      openExternal: (url) => {
+        const u = String(url || '');
+        if (!/^(https?|mailto):/i.test(u)) return Promise.resolve({ ok: false, error: 'Ce lien ne peut pas être ouvert (adresse non web).' });
+        window.open(u, '_blank', 'noopener,noreferrer');
+        return Promise.resolve({ ok: true, data: true });
+      },
     },
 
     thunderbird: {
@@ -289,7 +304,7 @@
     },
 
     on: (channel, callback) => {
-      const allowed = ['mail:sorted', 'mail:new', 'mail:changed', 'account:status', 'app:error', 'app:closeTab', 'app:updateAvailable', 'app:updateDownloaded'];
+      const allowed = ['mail:sorted', 'mail:new', 'mail:changed', 'account:status', 'app:error', 'app:closeTab', 'app:updateAvailable', 'app:updateDownloaded', 'app:open', 'mail:scheduled'];
       if (!allowed.includes(channel)) return () => {};
       if (!listeners.has(channel)) listeners.set(channel, new Set());
       listeners.get(channel).add(callback);

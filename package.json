@@ -1,6 +1,6 @@
 {
   "name": "mailhub",
-  "version": "1.2.4",
+  "version": "1.3.0",
   "description": "MailHub - messagerie multi-comptes IMAP avec tri automatique",
   "main": "main.js",
   "author": "MailHub",
@@ -13,8 +13,8 @@
     "dev": "node server.js",
     "start": "node server.js",
     "build": "node -e \"console.log('Build complete')\"",
-    "lint": "node -c server.js && node -c renderer/mailhub-web.js",
-    "test": "node test/rules.test.js && node test/thunderbird.test.js && node test/rulesio.test.js && node test/signature.test.js && node test/attachment.test.js",
+    "lint": "node -c server.js && node -c renderer/mailhub-web.js && node -c renderer/app.js && node -c main.js && node -c preload.js",
+    "test": "node test/rules.test.js && node test/thunderbird.test.js && node test/rulesio.test.js && node test/signature.test.js && node test/attachment.test.js && node test/scheduler.test.js",
     "dist:win": "electron-builder --win --x64 --publish never && node scripts/generate-manifest.js",
     "dist:mac": "electron-builder --mac --x64 --publish never && electron-builder --mac --arm64 --publish never && node scripts/generate-manifest.js",
     "dist": "electron-builder --publish never"

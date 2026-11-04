@@ -55,6 +55,7 @@ contextBridge.exposeInMainWorld('mailhub', {
     markAllReadInAccount: (accountId) => invoke('messages:markAllReadInAccount', accountId),
     deleteAllInFolder: (accountId, folder) => invoke('messages:deleteAllInFolder', accountId, folder),
     saveDraft: (accountId, mail) => invoke('messages:saveDraft', accountId, mail),
+    discardDraft: (accountId, draftId) => invoke('messages:discardDraft', accountId, draftId),
     flagged: () => invoke('messages:flagged'),
     pickAttachments: () => invoke('messages:pickAttachments'),
   },
@@ -78,6 +79,15 @@ contextBridge.exposeInMainWorld('mailhub', {
     duplicates: (items) => invoke('rules:duplicates', items),
   },
 
+  // envoi programmé
+  scheduled: {
+    list: () => invoke('scheduled:list'),
+    add: (accountId, mail, when) => invoke('scheduled:add', accountId, mail, when),
+    cancel: (id) => invoke('scheduled:cancel', id),
+    sendNow: (id) => invoke('scheduled:sendNow', id),
+    reschedule: (id, when) => invoke('scheduled:reschedule', id, when),
+  },
+
   signatures: {
     pickImage: () => invoke('signatures:pickImage'),
   },
@@ -91,6 +101,7 @@ contextBridge.exposeInMainWorld('mailhub', {
 
   app: {
     hide: () => invoke('app:hide'),
+    openExternal: (url) => invoke('app:openExternal', url),
   },
 
   // import des filtres Thunderbird
@@ -119,7 +130,7 @@ contextBridge.exposeInMainWorld('mailhub', {
 
   // événements poussés par le processus principal
   on: (channel, callback) => {
-    const allowed = ['mail:sorted', 'mail:new', 'mail:changed', 'account:status', 'app:error', 'app:closeTab', 'app:updateAvailable', 'app:updateDownloaded'];
+    const allowed = ['mail:sorted', 'mail:new', 'mail:changed', 'account:status', 'app:error', 'app:closeTab', 'app:updateAvailable', 'app:updateDownloaded', 'app:open', 'mail:scheduled'];
     if (!allowed.includes(channel)) return () => {};
     const listener = (_event, payload) => callback(payload);
     ipcRenderer.on(channel, listener);

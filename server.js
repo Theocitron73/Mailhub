@@ -12,6 +12,7 @@ const { attachmentPreview } = require('./src/attachment');
 const { cleanImage, buildSignedMessage } = require('./src/signature');
 const tb = require('./src/thunderbird');
 const { findRule, senderRule, upsertSenderRule } = require('./src/rules');
+const { Scheduler } = require('./src/scheduler');
 
 const PORT = 3000;
 const HOST = '0.0.0.0';
@@ -113,6 +114,11 @@ function initDemoData() {
   } else {
     seedDemoMessages(accId);
   }
+  // les brouillons enregistrés doivent être visibles (anciennes données de démo sans ce dossier)
+  const folders = demoStore.folders[accId];
+  if (folders && !folders.some((f) => f.specialUse === '\\Drafts')) {
+    folders.splice(1, 0, { path: 'Drafts', name: 'Brouillons', specialUse: '\\Drafts', delimiter: '/', selectable: true });
+  }
 }
 
 function saveDemoStore() {
@@ -132,6 +138,7 @@ function seedDemoMessages(accId) {
     { path: 'Projets', name: 'Projets', delimiter: '/', selectable: true },
     { path: 'Factures', name: 'Factures', delimiter: '/', selectable: true },
     { path: 'Newsletter', name: 'Newsletter', delimiter: '/', selectable: true },
+    { path: 'Drafts', name: 'Brouillons', specialUse: '\\Drafts', delimiter: '/', selectable: true },
     { path: 'Sent', name: 'Envoyés', specialUse: '\\Sent', delimiter: '/', selectable: true },
     { path: 'Archive', name: 'Archives', specialUse: '\\Archive', delimiter: '/', selectable: true },
     { path: 'Trash', name: 'Corbeille', specialUse: '\\Trash', delimiter: '/', selectable: true },
@@ -427,6 +434,22 @@ function getDemoFolders(accountId) {
   });
 }
 
+// Brouillons et pièces jointes reprises (démo)
+function demoDiscardDraft(accountId, draftId) {
+  const msgs = demoStore.messages[accountId] || [];
+  const keep = msgs.filter((m) => !(m.folder === 'Drafts' && m.messageId === draftId));
+  demoStore.messages[accountId] = keep;
+  return msgs.length - keep.length;
+}
+
+function demoSourceAttachments(src) {
+  if (!src || !Array.isArray(src.indexes)) return [];
+  const msgs = demoStore.messages[src.accountId] || [];
+  const found = msgs.find((m) => m.uid === Number(src.uid) && m.folder === src.folder);
+  if (!found) return [];
+  return src.indexes.map((i) => (found.attachments || [])[i]).filter(Boolean).map((a) => ({ ...a }));
+}
+
 // ------------------------------------------------------------- IPC Handler Logic
 async function handleChannel(channel, args) {
   // ---- accounts
@@ -456,7 +479,8 @@ async function handleChannel(channel, args) {
     if (!demoStore.folders[account.id]) {
       demoStore.folders[account.id] = [
         { path: 'INBOX', name: 'Boîte de réception', specialUse: '\\Inbox', delimiter: '/', selectable: true },
-        { path: 'Sent', name: 'Envoyés', specialUse: '\\Sent', delimiter: '/', selectable: true },
+        { path: 'Drafts', name: 'Brouillons', specialUse: '\\Drafts', delimiter: '/', selectable: true },
+    { path: 'Sent', name: 'Envoyés', specialUse: '\\Sent', delimiter: '/', selectable: true },
         { path: 'Trash', name: 'Corbeille', specialUse: '\\Trash', delimiter: '/', selectable: true },
       ];
       demoStore.messages[account.id] = [];
@@ -584,12 +608,14 @@ async function handleChannel(channel, args) {
     const [accountId, folder, query] = args;
     const q = String(query || '').toLowerCase().trim();
     const msgs = (demoStore.messages[accountId] || []).filter((m) => (folder ? m.folder === folder : true));
-    return msgs.filter((m) =>
+    const found = msgs.filter((m) =>
       (m.subject && m.subject.toLowerCase().includes(q)) ||
       (m.from && m.from.toLowerCase().includes(q)) ||
       (m.fromName && m.fromName.toLowerCase().includes(q)) ||
-      (m.text && m.text.toLowerCase().includes(q))
+      (m.text && m.text.toLowerCase().includes(q)) ||
+      (m.html && String(m.html).replace(/<[^>]*>/g, ' ').toLowerCase().includes(q))
     );
+    return { messages: found, total: found.length };
   }
 
   if (channel === 'messages:get') {
@@ -597,12 +623,27 @@ async function handleChannel(channel, args) {
     const msgs = demoStore.messages[accountId] || [];
     const found = msgs.find((m) => m.uid === Number(uid) && m.folder === folder) || msgs.find((m) => m.uid === Number(uid));
     if (!found) throw new Error('Message introuvable');
+    const addrs = (v) => String(v || '').split(',').map((x) => x.trim()).filter(Boolean).map((x) => {
+      const m = x.match(/^(.*)<([^>]+)>$/);
+      return m ? { name: m[1].replace(/"/g, '').trim(), address: m[2].trim() } : { name: '', address: x };
+    });
+    found.seen = true;
     return {
       uid: found.uid,
+      messageId: found.messageId || `<demo-${found.uid}@mailhub.web>`,
+      references: found.references || [],
+      inReplyTo: found.inReplyTo || '',
       subject: found.subject,
       from: { address: found.from, name: found.fromName },
-      to: [{ address: found.to, name: '' }],
-      cc: found.cc ? [{ address: found.cc, name: '' }] : [],
+      to: addrs(found.to),
+      cc: addrs(found.cc),
+      bcc: [],
+      replyTo: null,
+      replyToAll: [],
+      draft: found.folder === 'Drafts',
+      answered: !!found.answered,
+      signatureId: found.signatureId || '',
+      replyOf: found.replyOf || null,
       date: found.date,
       html: found.html,
       text: found.text,
@@ -622,8 +663,9 @@ async function handleChannel(channel, args) {
     const uidSet = new Set(uids.map(Number));
     msgs.forEach((m) => {
       if (m.folder === folder && uidSet.has(m.uid)) {
-        if (flag === '\\Seen') m.seen = !!on;
-        if (flag === '\\Flagged') m.flagged = !!on;
+        if (flag === '\\Seen' || flag === 'seen') m.seen = !!on;
+        if (flag === '\\Flagged' || flag === 'flagged') m.flagged = !!on;
+        if (flag === 'answered') m.answered = !!on;
       }
     });
     saveDemoStore();
@@ -675,7 +717,9 @@ async function handleChannel(channel, args) {
 
     let finalHtml = mail.html || `<div style="font-family:sans-serif;line-height:1.5;">${mail.text || ''}</div>`;
     let finalText = mail.text || '';
-    let finalAttachments = (mail.attachments || []).map((a, i) => {
+    const sourceAtts = demoSourceAttachments(mail.sourceAttachments);
+    let finalAttachments = [...(mail.attachments || []), ...sourceAtts].map((a, i) => {
+      if (a && a.contentBase64 !== undefined) return { ...a, index: i };
       const isObj = typeof a === 'object' && a !== null;
       return {
         index: i,
@@ -725,6 +769,11 @@ async function handleChannel(channel, args) {
 
     if (!demoStore.messages[accountId]) demoStore.messages[accountId] = [];
     demoStore.messages[accountId].unshift(newMsg);
+    if (mail.draftId) demoDiscardDraft(accountId, mail.draftId);
+    if (mail.replyOf) {
+      const orig = (demoStore.messages[mail.replyOf.accountId] || []).find((m) => m.uid === Number(mail.replyOf.uid) && m.folder === mail.replyOf.folder);
+      if (orig) orig.answered = true;
+    }
     saveDemoStore();
 
     // Record contacts
@@ -797,10 +846,18 @@ async function handleChannel(channel, args) {
         console.warn('Real IMAP saveDraft error:', e.message);
       }
     }
+    const draftId = mail.draftId || `<draft-${Date.now().toString(36)}@mailhub.web>`;
+    const sourceAtts = demoSourceAttachments(mail.sourceAttachments);
+    if (mail.draftId) demoDiscardDraft(accountId, mail.draftId);
     const newUid = ++demoStore.nextUid;
     const newMsg = {
       uid: newUid,
       folder: 'Drafts',
+      messageId: draftId,
+      inReplyTo: mail.inReplyTo || '',
+      references: mail.references || [],
+      signatureId: mail.signatureId || '',
+      replyOf: mail.replyOf || null,
       subject: mail.subject || '(sans objet)',
       from: acc.email,
       fromName: acc.name,
@@ -810,15 +867,30 @@ async function handleChannel(channel, args) {
       size: (mail.text || '').length + 500,
       seen: true,
       flagged: false,
-      hasAttachment: !!(mail.attachments && mail.attachments.length),
+      hasAttachment: !!((mail.attachments && mail.attachments.length) || sourceAtts.length),
       html: mail.html || '',
       text: mail.text || '',
-      attachments: mail.attachments || [],
+      attachments: [...(mail.attachments || []).map((a) => ({
+        filename: a.name || 'piece-jointe',
+        contentType: a.contentType || 'application/octet-stream',
+        size: a.size || 0,
+        contentBase64: a.dataUrl ? String(a.dataUrl).split(',')[1] || '' : '',
+      })), ...sourceAtts],
     };
     if (!demoStore.messages[accountId]) demoStore.messages[accountId] = [];
     demoStore.messages[accountId].unshift(newMsg);
     saveDemoStore();
-    return { ok: true };
+    return {
+      ok: true, draftId, folder: 'Drafts', uid: newUid, replaceable: true,
+      attachments: newMsg.attachments.map((x, index) => ({ index, filename: x.filename, size: x.size || 0 })),
+    };
+  }
+
+  if (channel === 'messages:discardDraft') {
+    const [accountId, draftId] = args;
+    const deleted = demoDiscardDraft(accountId, draftId);
+    saveDemoStore();
+    return { deleted };
   }
 
   if (channel === 'messages:flagged') {
@@ -1052,12 +1124,32 @@ async function handleChannel(channel, args) {
     return null;
   }
 
+  // ---- envoi programmé
+  if (channel === 'scheduled:list') return scheduler.list();
+  if (channel === 'scheduled:add') {
+    const m = { ...args[1] };
+    if (m.sourceAttachments) {
+      m.attachments = [...(m.attachments || []), ...demoSourceAttachments(m.sourceAttachments).map((x) => ({
+        name: x.filename, contentType: x.contentType, dataUrl: `data:${x.contentType || 'application/octet-stream'};base64,${x.contentBase64 || ''}`,
+      }))];
+      delete m.sourceAttachments;
+    }
+    return scheduler.add(args[0], m, args[2]);
+  }
+  if (channel === 'scheduled:cancel') return scheduler.cancel(args[0]);
+  if (channel === 'scheduled:sendNow') return scheduler.sendNow(args[0]);
+  if (channel === 'scheduled:reschedule') return scheduler.reschedule(args[0], args[1]);
+
   if (channel === 'app:hide') {
     return true;
   }
 
   throw new Error(`Canal inconnu : ${channel}`);
 }
+
+const scheduler = new Scheduler(store, (accountId, mail) => handleChannel('messages:send', [accountId, mail]),
+  (kind, item) => broadcast('mail:scheduled', { kind, item }));
+scheduler.start();
 
 // REST IPC Endpoint
 app.post('/api/ipc', async (req, res) => {

@@ -1,6 +1,6 @@
 'use strict';
 const assert = require('assert');
-const { attachmentPreview } = require('../src/attachment');
+const { attachmentPreview, safeOutgoing } = require('../src/attachment');
 let n = 0;
 function t(name, fn) { fn(); n++; console.log('  ok   ' + name); }
 const mk = (filename, contentType, content) => ({ filename, contentType, content: Buffer.from(content) });
@@ -30,5 +30,27 @@ t('autres types et fichiers trop lourds : pas d’aperçu', () => {
   const r = attachmentPreview(huge);
   assert.strictEqual(r.kind, 'other');
   assert.strictEqual(r.tooBig, true);
+});
+t('envoi : un chemin non choisi par l’utilisateur n’est jamais lu', () => {
+  const allowed = new Set(['/home/moi/devis.pdf']);
+  const size = () => 10;
+  const r = safeOutgoing({
+    to: 'a@b.fr',
+    attachments: [
+      { name: 'devis.pdf', path: '/home/moi/devis.pdf' },
+      { name: 'id_rsa', path: '/home/moi/.ssh/id_rsa' },
+      { name: 'glisse.txt', path: '/tmp/x', dataUrl: 'data:text/plain;base64,eA==' },
+      '/etc/passwd',
+      { name: '../../x', content: 'brut' },
+    ],
+  }, allowed, size);
+  assert.deepStrictEqual(r.attachments.map((a) => [a.name, a.path || null, !!a.dataUrl]), [
+    ['devis.pdf', '/home/moi/devis.pdf', false],
+    ['glisse.txt', null, true],
+  ]);
+  assert.strictEqual(r.to, 'a@b.fr');
+});
+t('envoi : pièces jointes trop lourdes refusées', () => {
+  assert.throws(() => safeOutgoing({ attachments: [{ name: 'a', path: '/a' }] }, new Set(['/a']), () => 40 * 1024 * 1024), /trop lourdes/);
 });
 console.log(`\n${n} tests réussis`);

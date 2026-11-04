@@ -42,7 +42,7 @@
           </div>
           <div class="search">
             <span class="search-icon" id="search-icon"></span>
-            <input id="search" type="search" placeholder="Rechercher expéditeur ou objet" autocomplete="off" spellcheck="false">
+            <input id="search" type="search" placeholder="Rechercher (expéditeur, objet, contenu)" autocomplete="off" spellcheck="false">
           </div>
         </header>
         <div class="sort-row">
@@ -53,6 +53,7 @@
             <option value="subject">Objet</option>
           </select>
           <button id="sort-dir" class="icon-btn" aria-label="Inverser l’ordre"></button>
+          <button id="btn-threads" class="icon-btn threads-btn" aria-pressed="false" aria-label="Conversations" title="Regrouper les messages par conversation"></button>
           <span id="sort-note" class="sort-note"></span>
           <button id="btn-sortnow" class="subtle" title="Applique vos règles de tri aux messages déjà présents dans ce dossier"></button>
         </div>

@@ -646,3 +646,52 @@ body.mac #tabbar { padding-top: 8px; }
   --shadow: 0 12px 40px rgba(0, 0, 0, 0.65);
   color-scheme: dark;
 }
+
+/* ---- liens des messages, réponses, brouillons */
+.link-tip {
+  position: fixed; left: 12px; bottom: 10px; z-index: 50; max-width: min(70vw, 720px);
+  padding: 4px 10px; border-radius: 6px; border: 1px solid var(--line);
+  background: var(--surface); color: var(--ink-2); font-size: 12px;
+  white-space: nowrap; overflow: hidden; text-overflow: ellipsis; pointer-events: none;
+  box-shadow: 0 2px 8px rgba(0, 0, 0, .12);
+}
+.link-tip[hidden] { display: none; }
+.draft-banner button { display: inline-flex; align-items: center; gap: 6px; }
+.draft-status { color: var(--ink-2); font-size: 12px; margin-right: 4px; }
+.compose-grid .row-line[hidden] { display: none; }
+.compose-grid .row-line.with-extra { grid-template-columns: 76px 1fr auto; }
+.link-btn { background: none; border: 0; padding: 2px 6px; color: var(--accent); font-size: 13px; cursor: pointer; }
+.link-btn:hover { text-decoration: underline; }
+.link-btn[hidden] { display: none; }
+
+/* ---- conversations */
+.threads-btn { flex: none; }
+.threads-btn.on { background: var(--accent-soft); color: var(--accent); }
+.threads-btn[hidden] { display: none; }
+.thread-toggle { border: 0; background: none; padding: 0; width: 16px; height: 16px; display: inline-flex; align-items: center; justify-content: center; color: var(--ink-2); cursor: pointer; flex: none; border-radius: 4px; }
+.thread-toggle:hover { background: var(--accent-soft); color: var(--ink); }
+.thread-toggle .ico { transition: transform .12s; }
+.row.thread.open .thread-toggle .ico { transform: rotate(90deg); }
+.thread-count { flex: none; margin-left: 6px; padding: 0 6px; min-width: 18px; height: 17px; line-height: 17px; border-radius: 9px; font-size: 11px; text-align: center; background: var(--accent-soft); color: var(--accent); font-weight: 600; }
+.row.child { padding-left: 34px; background: color-mix(in srgb, var(--accent-soft) 35%, transparent); }
+.row.child.selected { background: var(--accent-soft); }
+.marks .answered { color: var(--ink-3, var(--ink-2)); display: inline-flex; }
+
+/* ---- envoi programmé */
+.folder .count.warn { background: var(--danger); color: #fff; padding: 0 6px; border-radius: 9px; }
+.when-grid { display: grid; grid-template-columns: repeat(auto-fill, minmax(170px, 1fr)); gap: 8px; }
+.when-grid .field { grid-column: 1 / -1; margin-top: 6px; }
+.when-opt { display: flex; flex-direction: column; align-items: flex-start; gap: 2px; height: auto; padding: 10px 12px; text-align: left; }
+.when-opt small { color: var(--ink-2); font-weight: normal; }
+.sched-item { border: 1px solid var(--line); border-left: 4px solid var(--acc); border-radius: 10px; padding: 12px 16px; margin: 0 0 12px; display: grid; gap: 6px; }
+.sched-when { display: flex; align-items: center; gap: 8px; color: var(--accent); }
+.sched-when small { color: var(--ink-2); margin-left: auto; }
+.sched-subject { font-weight: 600; }
+.sched-to, .sched-att { color: var(--ink-2); font-size: 13px; display: flex; gap: 6px; align-items: center; overflow-wrap: anywhere; }
+.sched-item .toolbar-row { display: flex; flex-wrap: wrap; gap: 8px; margin-top: 4px; }
+
+/* ---- citations dans la rédaction */
+.compose-editor blockquote { margin: 6px 0 0 4px; padding-left: 12px; border-left: 2px solid var(--line); }
+.compose-editor .mh-quote-head, .compose-editor .mh-fwd-head { color: var(--ink-2); }
+.compose-editor img { max-width: 100%; height: auto; }
+.compose-editor table { max-width: 100%; }

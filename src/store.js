@@ -15,7 +15,7 @@ class Store {
     this.dir = dir;
     this.file = path.join(dir, 'mailhub-data.json');
     this.safe = safeStorage;
-    this.data = { accounts: [], rules: [], prefs: { theme: 'auto' }, sync: {}, contacts: {} };
+    this.data = { accounts: [], rules: [], prefs: { theme: 'auto' }, sync: {}, contacts: {}, scheduled: [] };
     this._load();
   }
 
@@ -247,6 +247,36 @@ class Store {
   }
 
   // ---- Préférences ----
+  // ---- Envoi programmé ----
+  listScheduled() {
+    return Array.isArray(this.data.scheduled) ? this.data.scheduled : [];
+  }
+
+  addScheduled({ accountId, mail, when }) {
+    if (!Array.isArray(this.data.scheduled)) this.data.scheduled = [];
+    const item = { id: 's_' + Date.now().toString(36) + Math.random().toString(36).slice(2, 6), accountId, mail, when, createdAt: new Date().toISOString(), attempts: 0 };
+    this.data.scheduled.push(item);
+    this._save();
+    return item;
+  }
+
+  updateScheduled(id, patch) {
+    const item = this.listScheduled().find((x) => x.id === id);
+    if (!item) return null;
+    Object.assign(item, patch);
+    this._save();
+    return item;
+  }
+
+  removeScheduled(id) {
+    const list = this.listScheduled();
+    const i = list.findIndex((x) => x.id === id);
+    if (i < 0) return null;
+    const [item] = list.splice(i, 1);
+    this._save();
+    return item;
+  }
+
   getPrefs() {
     return this.data.prefs;
   }
