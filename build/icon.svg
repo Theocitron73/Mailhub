@@ -1,0 +1,49 @@
+<svg xmlns="http://www.w3.org/2000/svg" viewBox="0 0 1024 1024" width="1024" height="1024">
+  <defs>
+    <linearGradient id="bg" x1="0.1" y1="0" x2="0.9" y2="1">
+      <stop offset="0" stop-color="#5c8bff"/>
+      <stop offset="0.5" stop-color="#3a56d8"/>
+      <stop offset="1" stop-color="#1c2878"/>
+    </linearGradient>
+    <radialGradient id="glow" cx="0.28" cy="0.12" r="0.75">
+      <stop offset="0" stop-color="#ffffff" stop-opacity="0.32"/>
+      <stop offset="1" stop-color="#ffffff" stop-opacity="0"/>
+    </radialGradient>
+    <linearGradient id="env" x1="0" y1="0" x2="0" y2="1">
+      <stop offset="0" stop-color="#ffffff"/>
+      <stop offset="1" stop-color="#dfe6ff"/>
+    </linearGradient>
+    <linearGradient id="green" x1="0" y1="0" x2="1" y2="1">
+      <stop offset="0" stop-color="#3ee0a8"/><stop offset="1" stop-color="#10a37a"/>
+    </linearGradient>
+    <linearGradient id="orange" x1="0" y1="0" x2="1" y2="1">
+      <stop offset="0" stop-color="#ffb35c"/><stop offset="1" stop-color="#ff7a3d"/>
+    </linearGradient>
+    <linearGradient id="flap" x1="0" y1="0" x2="1" y2="0">
+      <stop offset="0" stop-color="#4c6cf0"/><stop offset="1" stop-color="#2f45c4"/>
+    </linearGradient>
+    <filter id="sh" x="-25%" y="-25%" width="150%" height="160%">
+      <feDropShadow dx="0" dy="20" stdDeviation="24" flood-color="#0a1240" flood-opacity="0.45"/>
+    </filter>
+    <filter id="soft" x="-25%" y="-25%" width="150%" height="160%">
+      <feDropShadow dx="0" dy="8" stdDeviation="10" flood-color="#0a1240" flood-opacity="0.3"/>
+    </filter>
+    <filter id="outer" x="-10%" y="-10%" width="120%" height="125%">
+      <feDropShadow dx="0" dy="12" stdDeviation="16" flood-color="#000" flood-opacity="0.3"/>
+    </filter>
+  </defs>
+  <!-- fond : carré arrondi aux proportions macOS (824 px sur 1024) -->
+  <g filter="url(#outer)">
+    <rect x="100" y="100" width="824" height="824" rx="186" fill="url(#bg)"/>
+    <rect x="100" y="100" width="824" height="824" rx="186" fill="url(#glow)"/>
+    <rect x="102" y="102" width="820" height="820" rx="184" fill="none" stroke="#ffffff" stroke-opacity="0.14" stroke-width="4"/>
+  </g>
+  <!-- deux comptes en éventail derrière l'enveloppe -->
+  <rect x="270" y="282" width="484" height="330" rx="58" fill="url(#green)" transform="rotate(-11 512 447)" filter="url(#soft)"/>
+  <rect x="270" y="300" width="484" height="330" rx="58" fill="url(#orange)" transform="rotate(7 512 465)" filter="url(#soft)"/>
+  <!-- enveloppe -->
+  <g filter="url(#sh)">
+    <rect x="244" y="356" width="536" height="372" rx="64" fill="url(#env)"/>
+  </g>
+  <path d="M312 432 L512 572 L712 432" fill="none" stroke="url(#flap)" stroke-width="46" stroke-linecap="round" stroke-linejoin="round"/>
+</svg>
