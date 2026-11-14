@@ -1,0 +1,25 @@
+{
+  "appId": "com.mailhub.app",
+  "appName": "MailHub",
+  "webDir": "www",
+  "android": {
+    "allowMixedContent": false,
+    "captureInput": true
+  },
+  "plugins": {
+    "Nodejs": {
+      "nodeDir": "nodejs",
+      "startMode": "auto"
+    },
+    "Keyboard": {
+      "resize": "native"
+    },
+    "SystemBars": {
+      "insetsHandling": "css"
+    },
+    "LocalNotifications": {
+      "smallIcon": "ic_stat_mailhub",
+      "iconColor": "#3a56d8"
+    }
+  }
+}

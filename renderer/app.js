@@ -8,6 +8,9 @@
 
 const api = window.mailhub;
 document.body.classList.toggle('mac', api.platform === 'darwin');
+// Téléphone : application Android, ou version web sur un petit écran
+if (api.mobile || (api.platform === 'web' && window.matchMedia('(max-width: 720px)').matches)) document.body.classList.add('mobile');
+const isMobile = () => document.body.classList.contains('mobile');
 
 // ------------------------------------------------------------------ utilitaires
 
@@ -96,6 +99,7 @@ const state = {
   rules: [],
   contacts: [],
   scheduled: [],      // messages en attente d'envoi programmé
+  selectMode: false,  // téléphone : un appui coche/décoche au lieu d'ouvrir
   threadOpen: new Set(), // conversations dépliées
   view: 'mail',       // mail | rules | settings | welcome
   tabs: [],           // onglets ouverts (messages, pièces jointes)
@@ -787,6 +791,8 @@ function openNewFolderDialog(accountId, parentPath) {
 // ---------------------------------------------------------------- navigation
 
 async function selectFolder(accountId, folder) {
+  closeDrawer();
+  state.selectMode = false;
   setView('mail');
   showTab('list');
   state.expanded = false;
@@ -802,9 +808,14 @@ async function selectFolder(accountId, folder) {
   await loadMessages();
 }
 
-function updateTitle() {
+function folderTitle() {
   const { accountId, folder } = state.current;
-  $('#list-title').textContent = accountId === 'unified' ? 'Boîte unifiée' : accountId === 'favorites' ? 'Favoris' : folderLabel(accountId, folder);
+  return accountId === 'unified' ? 'Boîte unifiée' : accountId === 'favorites' ? 'Favoris' : folderLabel(accountId, folder);
+}
+
+function updateTitle() {
+  const { accountId } = state.current;
+  $('#list-title').textContent = folderTitle();
   $('#btn-sortnow').hidden = accountId === 'favorites';
   $('#btn-sortnow').title = accountId === 'unified'
     ? 'Applique vos règles de tri à la boîte de réception de chaque compte'
@@ -820,6 +831,7 @@ function setView(view) {
 }
 
 function showPanel(view) {
+  closeDrawer();
   setView(view);
   showTab('list');
   renderSidebar();
@@ -860,9 +872,10 @@ function applySizes() {
 }
 
 function applyLayout() {
-  const pref = layoutPref();
+  const pref = isMobile() ? 'full' : layoutPref();
   state.expanded = false;
-  const reading = false; // le plein écran passe désormais par les onglets
+  // Sur ordinateur le plein écran passe par les onglets ; sur téléphone, le message ouvert remplace la liste
+  const reading = isMobile() && !!state.opened;
   const mode = pref === 'full' || reading ? 'full' : pref;
   const rows = $('#list-rows');
   if (reading && !state.reading) state.listScroll = rows.scrollTop; // la liste va être masquée
@@ -1240,6 +1253,7 @@ function renderList() {
         on: { click: (e) => { e.stopPropagation(); toggleFlag(m); } },
       }, ico('star', 16))),
     unified ? h('div', { class: 'acc-tag' }, h('i'), (accountById(m.accountId) || {}).name || '') : null);
+    if (isMobile()) { row.draggable = false; attachSwipe(row, m); }
     rows.appendChild(row);
   });
 
@@ -1253,7 +1267,7 @@ function renderList() {
 function renderSelectionBar() {
   const bar = $('#selection-bar');
   const sel = selectedMessages();
-  if (state.sel.size < 2) { bar.hidden = true; return; }
+  if (state.sel.size < 2 && !(isMobile() && state.selectMode && state.sel.size)) { bar.hidden = true; return; }
   bar.hidden = false;
   clear(bar);
   const anyUnread = sel.some((m) => !m.seen);
@@ -1264,7 +1278,7 @@ function renderSelectionBar() {
     h('button', { class: 'subtle', on: { click: () => markJunk(sel, !sel.every((m) => isJunkFolder(m.accountId, m.folder))) } }, ico('junk', 16),
       sel.every((m) => isJunkFolder(m.accountId, m.folder)) ? 'Pas indésirable' : 'Indésirable'),
     h('button', { class: 'subtle', on: { click: () => deleteMessages(sel) } }, ico('trash', 16), 'Supprimer'),
-    h('button', { class: 'icon-btn', title: 'Annuler la sélection', 'aria-label': 'Annuler la sélection', on: { click: () => { state.sel.clear(); renderList(); } } }, ico('close', 16))
+    h('button', { class: 'icon-btn', title: 'Annuler la sélection', 'aria-label': 'Annuler la sélection', on: { click: () => { state.sel.clear(); state.selectMode = false; renderList(); } } }, ico('close', 16))
   );
 }
 
@@ -1292,8 +1306,9 @@ function onRowClick(e, m) {
   lastClickTime = now;
   lastClickKey = key;
 
-  if (e.metaKey || e.ctrlKey) {
+  if (e.metaKey || e.ctrlKey || (isMobile() && state.selectMode)) {
     if (state.sel.has(key)) state.sel.delete(key); else state.sel.add(key);
+    if (isMobile() && !state.sel.size) state.selectMode = false;
     state.anchor = key;
     renderList();
     return;
@@ -1310,7 +1325,8 @@ function onRowClick(e, m) {
   }
   selectOnly(m);
   // Mode « plein écran » : un simple clic sélectionne seulement, c'est le double-clic qui ouvre.
-  if (layoutPref() === 'full') { renderList(); return; }
+  if (layoutPref() === 'full' && !isMobile()) { renderList(); return; }
+  if (isMobile() && isDraftsFolder(m.accountId, m.folder)) { renderList(); resumeDraft(m); return; }
   // même message déjà ouvert (premier clic d'un double-clic) : on ne recharge pas
   if (state.opened && keyOf(state.opened.msg) === key && !state.opened.error) { renderList(); return; }
   openMessage(m);
@@ -1318,6 +1334,7 @@ function onRowClick(e, m) {
 
 // Double-clic (ou Entrée, clic molette) : le message s'ouvre dans un onglet, quelle que soit la disposition
 function onRowDblClick(m) {
+  if (isMobile()) return; // sur téléphone, un simple appui ouvre déjà le message
   selectOnly(m);
   // un brouillon se rouvre directement dans la rédaction
   if (isDraftsFolder(m.accountId, m.folder)) { renderList(); resumeDraft(m); return; }
@@ -1339,6 +1356,10 @@ function onRowContextMenu(e, m) {
   const anyUnflagged = sel.some((x) => !x.flagged);
 
   const items = [
+    ...(isMobile() && !state.selectMode ? [{
+      label: 'Sélectionner plusieurs messages', icon: 'check',
+      onClick: () => { state.selectMode = true; state.sel = new Set([key]); renderList(); },
+    }, { separator: true }] : []),
     {
       label: isMultiple ? `Ouvrir les ${sel.length} messages` : 'Ouvrir',
       icon: 'mailopen',
@@ -1351,14 +1372,14 @@ function onRowContextMenu(e, m) {
         }
       },
     },
-    {
+    ...(isMobile() ? [] : [{
       label: 'Ouvrir dans un nouvel onglet',
       icon: 'layoutFull',
       shortcut: 'Double-clic',
       onClick: () => {
         sel.forEach((x) => openInTab(x));
       },
-    },
+    }]),
     { separator: true },
     {
       label: anyUnread ? 'Marquer comme lu' : 'Marquer comme non lu',
@@ -1866,6 +1887,7 @@ function openTab(tab) {
 }
 
 async function openInTab(m) {
+  if (isMobile()) { showTab('list'); setView('mail'); selectOnly(m); openMessage(m); return; }
   const tab = openTab({ key: 'm|' + keyOf(m), kind: 'mail', msg: m, o: newOpened(m) });
   if (!tab || tab.loaded) return;
   tab.loaded = true;
@@ -1875,6 +1897,11 @@ async function openInTab(m) {
 }
 
 async function openAttachmentTab(m, a) {
+  if (isMobile() && !/^(image|text)\//i.test(a.contentType || '')) {
+    toast(`Ouverture de « ${a.filename} »…`);
+    try { await call(api.messages.openAttachment(m.accountId, m.folder, m.uid, a.index)); } catch (err) { toast(err.message, { error: true }); }
+    return;
+  }
   const tab = openTab({ key: 'a|' + keyOf(m) + '|' + a.index, kind: 'att', msg: m, att: a, data: null, loading: true, error: '' });
   if (!tab || tab.loaded) return;
   tab.loaded = true;
@@ -2043,6 +2070,11 @@ function renderReaderContent() {
     reader.appendChild(h('div', { class: 'reader-empty' }, ico('mail', 40), h('div', null, 'Sélectionnez un message pour le lire')));
     return;
   }
+  if (isMobile()) {
+    reader.appendChild(h('div', { class: 'm-readbar' },
+      h('button', { class: 'icon-btn', 'aria-label': 'Retour à la liste', title: 'Retour', on: { click: closeReader } }, ico('back', 20)),
+      h('span', { class: 'm-readbar-title' }, folderTitle())));
+  }
   renderMailInto(reader, o, renderReader);
 }
 
@@ -2072,7 +2104,7 @@ function renderMailInto(reader, o, redraw) {
             b.addEventListener('click', async () => { await toggleFlag(m); b.classList.toggle('star-on', !!m.flagged); b.setAttribute('aria-pressed', String(!!m.flagged)); });
             return b;
           })(),
-          (!reader.closest || !reader.closest('#tabview'))
+          (!isMobile() && (!reader.closest || !reader.closest('#tabview')))
             ? h('button', { class: 'icon-btn', title: 'Ouvrir dans un nouvel onglet', 'aria-label': 'Ouvrir dans un nouvel onglet', on: { click: () => openInTab(m) } }, ico('layoutFull'))
             : null,
           isDraft(m, d) ? h('button', { class: 'icon-btn', title: 'Continuer l’écriture', 'aria-label': 'Continuer l’écriture', on: { click: () => resumeDraft(m, d) } }, ico('pencil')) : null,
@@ -3375,6 +3407,7 @@ async function renderSettingsPanel() {
     h('p', { class: 'lead' }, 'Apparence et comptes connectés.'),
     h('h3', null, 'Apparence'),
     h('div', { class: 'seg' }, themeBtn('auto', 'Automatique'), themeBtn('light', 'Clair'), themeBtn('dark', 'Sombre'), themeBtn('graphite', 'Graphite')),
+    isMobile() ? null : [
     h('h3', null, 'Lecture des messages'),
     h('div', { class: 'seg' }, LAYOUTS.map((l) => h('button', { class: layoutPref() === l.id ? 'on' : '', on: { click: async () => { await setLayout(l.id); renderSettingsPanel(); } } }, l.short))),
     h('div', { class: 'field', style: 'margin-top:10px' },
@@ -3384,6 +3417,7 @@ async function renderSettingsPanel() {
         applySizes();
       } } })),
     h('p', { class: 'lead', style: 'margin:8px 0 0' }, 'Ce choix est aussi disponible en haut de la liste des messages. Un double-clic sur un message l’ouvre en plein écran, quelle que soit la disposition (en mode plein écran, un simple clic sélectionne seulement).'),
+    ],
     h('h3', null, 'Envoi'),
     h('div', { class: 'seg' },
       [[0, 'Immédiat'], [5, '5 s'], [10, '10 s'], [20, '20 s'], [30, '30 s']].map(([v, label]) => h('button', {
@@ -3423,6 +3457,7 @@ async function renderSettingsPanel() {
         } catch (err) { e.target.checked = !e.target.checked; toast(err.message, { error: true }); }
       } } }),
       h('span', null, 'Activer les notifications système pour les nouveaux e-mails et les messages rangés automatiquement.')),
+    isMobile() ? null : [
     h('h3', null, 'Démarrage'),
     h('label', { class: 'check' },
       h('input', { type: 'checkbox', checked: !!state.prefs.openAtLogin, on: { change: async (e) => {
@@ -3430,6 +3465,7 @@ async function renderSettingsPanel() {
         catch (err) { e.target.checked = !e.target.checked; toast(err.message, { error: true }); }
       } } }),
       h('span', null, 'Lancer MailHub à l’ouverture de session, sans fenêtre. Le tri automatique ne fonctionne que lorsque MailHub est en marche.')),
+    ],
     h('h3', null, 'Mises à jour'),
     h('div', { class: 'toolbar-row', style: 'align-items:center; gap:12px; margin-bottom:12px;' },
       h('button', { class: 'ghost', on: { click: async (e) => {
@@ -3442,6 +3478,11 @@ async function renderSettingsPanel() {
             toast('Mode développement : les mises à jour automatiques sont désactivées.');
           } else if (res.noRelease) {
             toast(res.message || 'Aucune mise à jour publiée pour cette plateforme.');
+          } else if (res.update && api.mobile) {
+            toast(`Mise à jour disponible (${res.latest}) !`, {
+              timeout: 20000,
+              actions: [{ label: 'Télécharger et installer', onClick: () => call(api.updates.install()).catch((e) => toast(e.message, { error: true })) }],
+            });
           } else if (res.update) {
             toast(`Mise à jour disponible (${res.latest || res.info?.version}) !`, {
               timeout: 20000,
@@ -4056,6 +4097,14 @@ api.on('app:updateAvailable', ({ version }) => {
   toast(`Une mise à jour (${version}) est disponible. Téléchargement en cours…`);
 });
 
+// Android : une nouvelle version (APK) est publiée ; Android l'installe après téléchargement
+api.on('app:updateApk', ({ version }) => {
+  toast(`MailHub ${version} est disponible.`, {
+    timeout: 30000,
+    actions: [{ label: 'Télécharger', onClick: () => call(api.updates.install()).catch((e) => toast(e.message, { error: true })) }],
+  });
+});
+
 api.on('app:updateDownloaded', ({ version }) => {
   toast(`Mise à jour (${version}) téléchargée et prête !`, {
     timeout: 60000,
@@ -4194,9 +4243,125 @@ window.addEventListener('unhandledrejection', (e) => {
   toast(`Erreur : ${(e.reason && e.reason.message) || e.reason}`, { error: true });
 });
 
+
+// ------------------------------------------------------------------ téléphone
+// Tiroir latéral (comptes et dossiers), bouton « Écrire » flottant, bouton retour Android,
+// gestes sur la liste (balayer, tirer pour actualiser).
+
+function openDrawer() {
+  if (!isMobile()) return;
+  document.body.classList.add('drawer-open');
+  $('#sidebar').setAttribute('aria-hidden', 'false');
+}
+function closeDrawer() {
+  if (!document.body.classList.contains('drawer-open')) return false;
+  document.body.classList.remove('drawer-open');
+  $('#sidebar').setAttribute('aria-hidden', 'true');
+  return true;
+}
+
+// Bouton retour : referme d'abord ce qui est par-dessus, puis remonte d'un niveau
+function mobileBack() {
+  if ($('#ctx-menu')) { closeMenu(); return true; }
+  if (dialogStack.length) { dialogStack[dialogStack.length - 1].requestClose(); return true; }
+  if (closeDrawer()) return true;
+  if (state.tab !== 'list') { closeTab(state.tab); return true; }
+  if (state.view === 'mail' && state.opened) { closeReader(); return true; }
+  if (state.selectMode || state.sel.size > 1) { state.selectMode = false; state.sel.clear(); renderList(); return true; }
+  if (state.view !== 'mail' && state.accounts.length) { showMail(); updateTitle(); return true; }
+  if (state.query) { state.query = ''; $('#search').value = ''; loadMessages(); return true; }
+  if (state.view === 'mail' && state.current.accountId !== 'unified') { selectFolder('unified', 'INBOX'); return true; }
+  return false; // rien à fermer : l'application passe en arrière-plan
+}
+
+// Balayer une ligne : vers la droite = lu / non lu, vers la gauche = supprimer
+function attachSwipe(row, m) {
+  let x0 = 0;
+  let y0 = 0;
+  let dx = 0;
+  let active = false;
+  let decided = false;
+  const reset = () => { row.style.transform = ''; row.classList.remove('swiping', 'swipe-left', 'swipe-right'); };
+  row.addEventListener('touchstart', (e) => {
+    if (e.touches.length !== 1 || state.selectMode) return;
+    x0 = e.touches[0].clientX; y0 = e.touches[0].clientY; dx = 0; active = true; decided = false;
+  }, { passive: true });
+  row.addEventListener('touchmove', (e) => {
+    if (!active) return;
+    const mx = e.touches[0].clientX - x0;
+    const my = e.touches[0].clientY - y0;
+    if (!decided) {
+      if (Math.abs(mx) < 12 && Math.abs(my) < 12) return;
+      decided = true;
+      if (Math.abs(my) > Math.abs(mx)) { active = false; return; } // défilement vertical
+    }
+    dx = mx;
+    row.classList.add('swiping');
+    row.classList.toggle('swipe-right', dx > 0);
+    row.classList.toggle('swipe-left', dx < 0);
+    row.style.transform = `translateX(${dx}px)`;
+  }, { passive: true });
+  const end = () => {
+    if (!active) return;
+    active = false;
+    const limit = row.offsetWidth * 0.33;
+    if (dx > limit) { reset(); setSeen([m], !m.seen); }
+    else if (dx < -limit) { row.style.transform = 'translateX(-100%)'; setTimeout(() => deleteMessages([m]), 120); }
+    else reset();
+  };
+  row.addEventListener('touchend', end);
+  row.addEventListener('touchcancel', () => { active = false; reset(); });
+}
+
+// Tirer la liste vers le bas pour actualiser
+function initPullToRefresh() {
+  const rows = $('#list-rows');
+  const hint = h('div', { class: 'ptr', 'aria-hidden': 'true' }, ico('refresh', 18));
+  rows.parentNode.insertBefore(hint, rows);
+  let y0 = null;
+  let pull = 0;
+  rows.addEventListener('touchstart', (e) => { y0 = rows.scrollTop <= 0 && e.touches.length === 1 ? e.touches[0].clientY : null; pull = 0; }, { passive: true });
+  rows.addEventListener('touchmove', (e) => {
+    if (y0 === null) return;
+    pull = Math.max(0, Math.min(90, e.touches[0].clientY - y0));
+    hint.style.height = pull * 0.6 + 'px';
+    hint.classList.toggle('ready', pull > 70);
+  }, { passive: true });
+  rows.addEventListener('touchend', () => {
+    if (y0 !== null && pull > 70) { hint.classList.add('spin'); Promise.resolve(loadMessages({ silent: true })).finally(() => hint.classList.remove('spin')); }
+    hint.style.height = '';
+    hint.classList.remove('ready');
+    y0 = null;
+  });
+}
+
+function initMobile() {
+  if (!isMobile()) return;
+  const menuBtn = (id) => h('button', { id, class: 'icon-btn m-menu', 'aria-label': 'Comptes et dossiers', title: 'Comptes et dossiers', on: { click: openDrawer } }, ico('menu', 22));
+  $('.list-title-row').insertBefore(menuBtn('m-menu'), $('#list-title'));
+  // panneaux (règles, réglages…) : même bouton, en haut à gauche
+  document.body.appendChild(menuBtn('m-menu-panel'));
+  document.body.appendChild(h('div', { class: 'drawer-scrim', on: { click: closeDrawer } }));
+  document.body.appendChild(h('button', { id: 'm-fab', class: 'primary', 'aria-label': 'Écrire un message', title: 'Écrire', on: { click: () => openCompose() } }, ico('pencil', 22)));
+  $('#sidebar').setAttribute('aria-hidden', 'true');
+  // un appui sur un dossier ou un lien de la barre latérale referme le tiroir
+  $('#sidebar').addEventListener('click', (e) => { if (e.target.closest('.folder, .sb-link, #btn-compose')) setTimeout(closeDrawer, 0); });
+  // balayer depuis le bord gauche ouvre le tiroir
+  let edge = null;
+  document.addEventListener('touchstart', (e) => { edge = e.touches[0].clientX < 18 && state.view !== 'welcome' ? e.touches[0].clientX : null; }, { passive: true });
+  document.addEventListener('touchmove', (e) => { if (edge !== null && e.touches[0].clientX - edge > 60) { edge = null; openDrawer(); } }, { passive: true });
+  initPullToRefresh();
+  if (window.mailhubMobile) window.mailhubMobile.onBack(mobileBack);
+  // le clavier virtuel ne doit pas masquer le champ en cours de saisie
+  document.addEventListener('focusin', (e) => {
+    if (e.target.matches && e.target.matches('input, textarea, [contenteditable="true"]')) setTimeout(() => e.target.scrollIntoView({ block: 'nearest' }), 300);
+  });
+}
+
 // ----------------------------------------------------------------- démarrage
 
 (async function init() {
+  initMobile();
   renderLayoutSwitch();
   initSplitter();
   initSidebarSplitter();

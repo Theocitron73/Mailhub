@@ -1,6 +1,6 @@
 {
   "name": "mailhub",
-  "version": "1.3.1",
+  "version": "1.4.0",
   "description": "MailHub - messagerie multi-comptes IMAP avec tri automatique",
   "main": "main.js",
   "author": "MailHub",
@@ -13,11 +13,12 @@
     "dev": "node server.js",
     "start": "node server.js",
     "build": "node -e \"console.log('Build complete')\"",
-    "lint": "node -c server.js && node -c renderer/mailhub-web.js && node -c renderer/app.js && node -c main.js && node -c preload.js",
-    "test": "node test/rules.test.js && node test/thunderbird.test.js && node test/rulesio.test.js && node test/signature.test.js && node test/attachment.test.js && node test/scheduler.test.js",
+    "lint": "node -c server.js && node -c renderer/mailhub-web.js && node -c renderer/app.js && node -c main.js && node -c preload.js && node -c renderer/mailhub-mobile.js && node -c mobile/nodejs/index.js",
+    "test": "node test/rules.test.js && node test/thunderbird.test.js && node test/rulesio.test.js && node test/signature.test.js && node test/attachment.test.js && node test/scheduler.test.js && node test/mobile-node.test.js",
     "dist:win": "electron-builder --win --x64 --publish never && node scripts/generate-manifest.js",
     "dist:mac": "electron-builder --mac --x64 --publish never && electron-builder --mac --arm64 --publish never && node scripts/generate-manifest.js",
-    "dist": "electron-builder --publish never"
+    "dist": "electron-builder --publish never",
+    "mobile:build": "node scripts/build-mobile.js"
   },
   "dependencies": {
     "electron-updater": "^6.8.9",
@@ -28,7 +29,8 @@
   },
   "devDependencies": {
     "electron": "^33.2.0",
-    "electron-builder": "^25.1.8"
+    "electron-builder": "^25.1.8",
+    "esbuild": "0.28.2"
   },
   "build": {
     "appId": "com.mailhub.app",
@@ -58,7 +60,9 @@
       "target": [
         {
           "target": "nsis",
-          "arch": ["x64"]
+          "arch": [
+            "x64"
+          ]
         }
       ],
       "icon": "build/icon.ico"
@@ -80,11 +84,17 @@
       "target": [
         {
           "target": "dmg",
-          "arch": ["x64", "arm64"]
+          "arch": [
+            "x64",
+            "arm64"
+          ]
         },
         {
           "target": "zip",
-          "arch": ["x64", "arm64"]
+          "arch": [
+            "x64",
+            "arm64"
+          ]
         }
       ],
       "hardenedRuntime": false,

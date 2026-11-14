@@ -82,6 +82,60 @@ npm start
 npm test   # moteur de règles + lecture des filtres Thunderbird
 ```
 
+## Version Android
+
+MailHub existe aussi pour **téléphone Android** (Android 7 ou plus récent, téléphones 64 bits). C'est la même application, avec toutes ses fonctions : boîte unifiée, dossiers, lecture, rédaction (réponse, transfert, brouillons, annulation et envoi programmé), règles de tri, signatures, favoris, indésirables, conversations, carnet d'adresses, import/export.
+
+### Installer
+
+1. Sur le téléphone, ouvrez la page [Releases](https://github.com/Theocitron73/Mailhub/releases/latest) et téléchargez `MailHub-x.y.z.apk`.
+2. Ouvrez le fichier : Android demande d'autoriser l'installation depuis votre navigateur (« Sources inconnues »), acceptez puis installez.
+3. Ajoutez vos comptes comme sur ordinateur (les comptes ne sont pas copiés depuis l'ordinateur ; les règles peuvent l'être par « Exporter mes règles » / « Importer un fichier de règles »).
+
+Les nouvelles versions sont signalées dans l'application (Réglages → « Vérifier les mises à jour ») : MailHub télécharge l'APK, Android l'installe par-dessus en gardant vos données.
+
+### Sur le téléphone
+
+- **Navigation** : le bouton ☰ (ou un glissement depuis le bord gauche) ouvre comptes et dossiers ; un appui ouvre un message en plein écran ; le bouton retour d'Android revient en arrière ; le bouton crayon écrit un message.
+- **Gestes** : balayer un message vers la droite le marque lu / non lu, vers la gauche le supprime ; tirer la liste vers le bas l'actualise ; un appui long ouvre le menu du message (dont « Sélectionner plusieurs messages »).
+- **Pièces jointes** : images et textes s'affichent dans MailHub ; les autres fichiers (PDF…) s'ouvrent avec l'application du téléphone ; « Enregistrer » ouvre le partage d'Android (Fichiers, Drive…).
+- **Notifications** de nouveaux messages et de tri quand MailHub est en arrière-plan.
+- **Sécurité** : les mots de passe sont chiffrés avec une clé gardée dans le coffre du téléphone (Keystore Android) ; les données de MailHub sont exclues des sauvegardes Android.
+
+**Limite** : Android met en pause les applications en arrière-plan. Le tri automatique et les notifications fonctionnent tant que MailHub est ouvert ou vient d'être quitté ; le courrier arrivé pendant la pause est trié et signalé dès que vous rouvrez l'application (c'est aussi le cas des envois programmés).
+
+### Comment c'est fait
+
+L'interface est celle de l'ordinateur (`renderer/`), emballée par [Capacitor](https://capacitorjs.com) ; le moteur mail (`src/` : IMAP, SMTP, tri, envoi programmé) tourne dans un **Node.js embarqué** sur le téléphone ([@capawesome/capacitor-nodejs](https://capawesome.io/docs/sdks/capacitor/nodejs/)). Fichiers : `mobile/nodejs/index.js` (moteur), `renderer/mailhub-mobile.js` (pont avec l'interface), `mobile/android/` (projet Android).
+
+Construire l'APK soi-même (Node.js 22, JDK 21, SDK Android) :
+
+```bash
+npm install
+cd mobile && npm install && npm run apk:debug
+```
+
+### Publier des APK signés (une seule fois)
+
+Android n'installe une mise à jour que si elle est signée avec **la même clé** que la version installée. Le workflow GitHub signe l'APK avec une clé fournie par quatre secrets du dépôt (Settings → Secrets and variables → Actions) :
+
+| Secret | Contenu |
+| --- | --- |
+| `ANDROID_KEYSTORE_BASE64` | le fichier de clé `.jks`, encodé en base64 |
+| `ANDROID_KEYSTORE_PASSWORD` | le mot de passe du fichier de clé |
+| `ANDROID_KEY_ALIAS` | le nom de la clé |
+| `ANDROID_KEY_PASSWORD` | le mot de passe de la clé |
+
+Créer la clé (une fois, à conserver précieusement : perdue, elle empêche toute mise à jour) :
+
+```bash
+keytool -genkeypair -keystore mailhub.jks -alias mailhub -keyalg RSA -keysize 4096 -validity 10000
+```
+
+Puis encoder le fichier pour `ANDROID_KEYSTORE_BASE64` : `base64 -w0 mailhub.jks` (Linux) ou `base64 -i mailhub.jks` (macOS).
+
+Sans ces secrets, le workflow produit seulement un APK de **test** (artefact `apk-test-android` de l'onglet Actions), qui n'est pas joint à la version publiée.
+
 ## Premier lancement : avertissements du système
 
 Les installateurs ne sont **pas signés** tant que vous n'avez pas de certificat, donc :
