@@ -70,9 +70,81 @@ jobs:
           path: ${{ matrix.files }}
           if-no-files-found: warn
 
+  # Application Android (Capacitor + Node.js embarqué)
+  android:
+    runs-on: ubuntu-latest
+    env:
+      HAS_KEY: ${{ secrets.ANDROID_KEYSTORE_BASE64 != '' }}
+    steps:
+      - uses: actions/checkout@v4
+
+      - uses: actions/setup-node@v4
+        with:
+          node-version: 22
+
+      - uses: actions/setup-java@v4
+        with:
+          distribution: temurin
+          java-version: 21
+          cache: gradle
+
+      - run: npm install
+
+      - run: npm test
+
+      - name: Dépendances Capacitor
+        working-directory: mobile
+        run: npm ci
+
+      - name: Interface et moteur mail pour Android
+        run: npm run mobile:build
+
+      - name: Synchronisation Capacitor
+        working-directory: mobile
+        run: npx cap sync android
+
+      - name: Clé de signature
+        if: env.HAS_KEY == 'true'
+        env:
+          ANDROID_KEYSTORE_BASE64: ${{ secrets.ANDROID_KEYSTORE_BASE64 }}
+        run: |
+          echo "$ANDROID_KEYSTORE_BASE64" | base64 -d > "$RUNNER_TEMP/mailhub.jks"
+          echo "MAILHUB_KEYSTORE=$RUNNER_TEMP/mailhub.jks" >> "$GITHUB_ENV"
+
+      # Avec la clé : APK signé, publié avec la version. Sans clé : APK de test (débogage) seulement.
+      - name: Construction de l'APK
+        working-directory: mobile/android
+        env:
+          MAILHUB_KEYSTORE_PASSWORD: ${{ secrets.ANDROID_KEYSTORE_PASSWORD }}
+          MAILHUB_KEY_ALIAS: ${{ secrets.ANDROID_KEY_ALIAS }}
+          MAILHUB_KEY_PASSWORD: ${{ secrets.ANDROID_KEY_PASSWORD }}
+        run: |
+          VERSION=$(node -p "require('../../package.json').version")
+          mkdir -p ../../dist
+          if [ "$HAS_KEY" = "true" ]; then
+            ./gradlew assembleRelease --no-daemon
+            cp app/build/outputs/apk/release/app-release.apk "../../dist/MailHub-${VERSION}.apk"
+          else
+            echo "::warning::Secrets de signature Android absents : APK de test non publié (voir README, section Android)."
+            ./gradlew assembleDebug --no-daemon
+            cp app/build/outputs/apk/debug/app-debug.apk "../../dist/MailHub-${VERSION}-test.apk"
+          fi
+
+      - uses: actions/upload-artifact@v4
+        if: env.HAS_KEY == 'true'
+        with:
+          name: installateur-android
+          path: dist/*.apk
+
+      - uses: actions/upload-artifact@v4
+        if: env.HAS_KEY != 'true'
+        with:
+          name: apk-test-android
+          path: dist/*.apk
+
   release:
     if: startsWith(github.ref, 'refs/tags/v') || github.ref == 'refs/heads/main'
-    needs: build
+    needs: [build, android]
     runs-on: ubuntu-latest
     permissions:
       contents: write
@@ -88,6 +160,7 @@ jobs:
       - uses: actions/download-artifact@v4
         with:
           path: installateurs
+          pattern: installateur-*
           merge-multiple: true
 
       - name: Publier la Release GitHub

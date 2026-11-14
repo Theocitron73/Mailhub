@@ -695,3 +695,167 @@ body.mac #tabbar { padding-top: 8px; }
 .compose-editor .mh-quote-head, .compose-editor .mh-fwd-head { color: var(--ink-2); }
 .compose-editor img { max-width: 100%; height: auto; }
 .compose-editor table { max-width: 100%; }
+
+/* ======================================================================= téléphone
+   body.mobile : application Android (et version web sur petit écran).
+   Une seule colonne ; comptes et dossiers dans un tiroir ; message ouvert en plein écran. */
+.m-menu, #m-menu-panel, #m-fab, .drawer-scrim, .m-readbar, .ptr { display: none; }
+
+body.mobile {
+  --safe-top: var(--safe-area-inset-top, env(safe-area-inset-top, 0px));
+  --safe-bottom: var(--safe-area-inset-bottom, env(safe-area-inset-bottom, 0px));
+  --safe-left: var(--safe-area-inset-left, env(safe-area-inset-left, 0px));
+  --safe-right: var(--safe-area-inset-right, env(safe-area-inset-right, 0px));
+  font-size: 15px;
+  -webkit-tap-highlight-color: transparent;
+  overscroll-behavior: none;
+}
+body.mobile #app {
+  grid-template-columns: minmax(0, 1fr);
+  height: 100dvh;
+  padding: var(--safe-top) var(--safe-right) 0 var(--safe-left);
+  box-sizing: border-box;
+}
+body.mobile #main, body.mobile #panel, body.mobile #tabview, body.mobile #tabbar { grid-column: 1; }
+body.mobile #sb-splitter, body.mobile #splitter, body.mobile #layout-switch, body.mobile .sb-drag { display: none !important; }
+body.mobile .icon-btn { width: 40px; height: 40px; }
+
+/* tiroir latéral */
+body.mobile #sidebar {
+  position: fixed; z-index: 60; top: 0; bottom: 0; left: 0;
+  width: min(86vw, 330px);
+  padding: var(--safe-top) 0 var(--safe-bottom) var(--safe-left);
+  box-sizing: border-box;
+  transform: translateX(-102%); transition: transform .22s cubic-bezier(.2, .8, .2, 1);
+  box-shadow: var(--shadow);
+}
+body.mobile.drawer-open #sidebar { transform: none; }
+body.mobile .drawer-scrim { display: block; position: fixed; inset: 0; z-index: 55; background: rgba(8, 14, 24, .45); opacity: 0; pointer-events: none; transition: opacity .2s; }
+body.mobile.drawer-open .drawer-scrim { opacity: 1; pointer-events: auto; }
+body.mobile .sb-head { padding: 14px 14px 10px; }
+body.mobile .folder, body.mobile .sb-link { height: 44px; font-size: 15px; }
+
+/* liste */
+body.mobile .m-menu { display: inline-grid; place-items: center; margin: 0 4px 0 -8px; flex: none; }
+body.mobile .list-head { padding: 8px 12px 10px; }
+body.mobile .list-title-row { justify-content: flex-start; gap: 4px; margin-bottom: 8px; }
+body.mobile .list-title-row h1 { flex: 1; min-width: 0; font-size: 20px; overflow: hidden; text-overflow: ellipsis; white-space: nowrap; }
+body.mobile .search input { height: 40px; font-size: 16px; } /* 16 px : pas de zoom automatique au focus */
+body.mobile .sort-row { padding: 4px 8px 4px 12px; }
+body.mobile .sort-row label[for="sort-by"], body.mobile #sort-note { display: none; }
+body.mobile #btn-sortnow { margin-left: auto; font-size: 0; gap: 0; padding: 0 10px; }
+body.mobile #btn-sortnow .ico { width: 18px; height: 18px; }
+body.mobile .row { padding: 12px 14px 12px 15px; touch-action: pan-y; background: var(--surface); }
+body.mobile .row .star-btn { opacity: 1; width: 34px; height: 34px; }
+body.mobile .row:hover { background: var(--surface); }
+body.mobile .row.selected { background: var(--accent-soft); }
+body.mobile .row.swiping { transition: none; z-index: 1; }
+body.mobile .row:not(.swiping) { transition: transform .18s ease-out; }
+body.mobile .row.swipe-right { box-shadow: inset 4px 0 0 var(--accent); }
+body.mobile .row.swipe-left { box-shadow: inset -4px 0 0 var(--danger); }
+body.mobile #list-rows { padding-bottom: calc(96px + var(--safe-bottom)); overscroll-behavior-y: contain; }
+body.mobile .ptr { display: grid; place-items: center; height: 0; overflow: hidden; color: var(--ink-2); transition: height .15s; }
+body.mobile .ptr.ready { color: var(--accent); }
+body.mobile .ptr.spin { height: 34px; }
+body.mobile .ptr.spin .ico { animation: mh-spin .8s linear infinite; }
+@keyframes mh-spin { to { transform: rotate(360deg); } }
+body.mobile .selection-bar { flex-wrap: wrap; padding: 6px 8px 6px 14px; }
+
+/* bouton « Écrire » flottant */
+body.mobile #m-fab {
+  display: grid; place-items: center; position: fixed; z-index: 40;
+  right: calc(18px + var(--safe-right)); bottom: calc(20px + var(--safe-bottom));
+  width: 58px; height: 58px; padding: 0; border-radius: 18px; box-shadow: 0 6px 18px rgba(20, 40, 120, .35);
+}
+body.mobile:not(.view-mail) #m-fab, body.mobile.tab-view #m-fab, body.mobile #main.reading ~ #m-fab { display: none; }
+body.mobile.view-mail:has(#main.reading) #m-fab, body.mobile.drawer-open #m-fab { display: none; }
+
+/* message ouvert : plein écran, barre de retour */
+body.mobile .m-readbar {
+  display: flex; align-items: center; gap: 4px; position: sticky; top: 0; z-index: 3;
+  padding: 4px 8px; background: var(--surface); border-bottom: 1px solid var(--line);
+}
+body.mobile .m-readbar-title { color: var(--ink-2); font-size: 14px; overflow: hidden; text-overflow: ellipsis; white-space: nowrap; }
+body.mobile #reader { overflow-y: auto; }
+body.mobile .reader-head { padding: 14px 16px 10px; }
+body.mobile .reader-head h2 { font-size: 21px; max-width: none; }
+body.mobile .reader-meta { grid-template-columns: minmax(0, 1fr); }
+body.mobile .reader-actions { flex-wrap: wrap; margin-left: -8px; }
+body.mobile .reader-date { text-align: left; }
+body.mobile .sender-addr { display: block; margin-left: 0; overflow-wrap: anywhere; }
+body.mobile .attachments { padding: 0 16px 12px; }
+body.mobile .att-chip { height: 40px; max-width: 100%; }
+body.mobile .strip { padding: 6px 12px 0; }
+body.mobile .remote-banner { padding: 8px 16px; flex-wrap: wrap; }
+body.mobile .mail-frame { min-height: 70vh; }
+
+/* panneaux (règles, réglages…) */
+body.mobile #m-menu-panel { position: fixed; z-index: 30; top: calc(8px + var(--safe-top)); left: calc(6px + var(--safe-left)); background: var(--surface); }
+body.mobile.view-panel:not(.tab-view) #m-menu-panel { display: grid; place-items: center; }
+body.mobile .panel-inner { padding: 60px 16px calc(40px + var(--safe-bottom)); }
+body.mobile .panel-inner h1 { font-size: 24px; }
+body.mobile .toolbar-row, body.mobile .seg { flex-wrap: wrap; }
+body.mobile .acc-row { flex-wrap: wrap; }
+
+/* onglets (pièces jointes) */
+body.mobile #tabbar { overflow-x: auto; scrollbar-width: none; }
+body.mobile .att-head { flex-wrap: wrap; gap: 10px; }
+body.mobile .att-actions { flex-wrap: wrap; }
+
+/* fenêtres : plein écran pour la rédaction, feuille en bas pour le reste */
+body.mobile .overlay { padding: 0; place-items: end stretch; }
+body.mobile .dialog {
+  width: 100%; max-height: calc(100dvh - var(--safe-top) - 24px);
+  border-radius: 16px 16px 0 0; border-bottom: 0;
+  padding-bottom: var(--safe-bottom); box-sizing: border-box;
+  animation: mh-sheet .2s ease-out;
+}
+body.mobile .dialog.large { width: 100%; height: 100dvh; max-height: none; border-radius: 0; padding-top: var(--safe-top); }
+@keyframes mh-sheet { from { transform: translateY(30px); opacity: 0; } }
+body.mobile .dialog-head { padding: 16px 16px 4px; }
+body.mobile .dialog-body { padding: 10px 16px; }
+body.mobile .dialog-foot { padding: 10px 16px 14px; flex-wrap: wrap; }
+body.mobile .dialog-foot .grow { flex-basis: 100%; max-width: none; }
+body.mobile .dialog.large .dialog-body { flex: 1; }
+body.mobile .compose-grid .row-line { grid-template-columns: 62px minmax(0, 1fr); }
+body.mobile .compose-grid .row-line.with-extra { grid-template-columns: 62px minmax(0, 1fr) auto; }
+body.mobile .compose-grid input, body.mobile .compose-grid select { font-size: 16px; min-width: 0; }
+body.mobile .compose-toolbar { flex-wrap: nowrap; overflow-x: auto; scrollbar-width: none; }
+body.mobile .compose-editor { min-height: 38vh; font-size: 16px; }
+
+/* menus : feuille d'actions en bas de l'écran */
+body.mobile .menu {
+  left: 0 !important; right: 0; top: auto !important; bottom: 0;
+  border-radius: 16px 16px 0 0; padding: 8px 8px calc(8px + var(--safe-bottom));
+  max-height: 70dvh; overflow-y: auto; animation: mh-sheet .18s ease-out;
+}
+body.mobile .menu button { height: 46px; font-size: 15px; }
+body.mobile .menu .menu-shortcut { display: none; }
+
+/* messages d'information */
+body.mobile #toasts { left: 12px; right: 12px; bottom: calc(90px + var(--safe-bottom)); max-width: none; }
+body.mobile .toast { flex-wrap: wrap; }
+
+/* téléphone : ligne de message sur deux lignes (expéditeur + date, puis objet), quelle que soit la disposition */
+body.mobile #main .row {
+  grid-template-columns: minmax(0, 1fr) auto;
+  grid-template-areas: "from date" "subject marks";
+  align-items: center;
+  gap: 3px 10px;
+}
+body.mobile #main .row.has-acc { grid-template-areas: "from date" "subject marks" "acc acc"; }
+body.mobile #main .row .date { min-width: 0; }
+body.mobile #main .row .acc-tag { white-space: nowrap; overflow: hidden; }
+body.mobile #main .row .from .who { font-weight: 500; }
+body.mobile #main .row.unread .from .who, body.mobile #main .row.unread .subject { font-weight: 650; }
+body.mobile #main .row .subject { color: var(--ink-2); }
+body.mobile #main .row.unread .subject { color: var(--ink); }
+body.mobile #main .row .from .who small { display: none; } /* adresse complète : trop longue sur téléphone */
+/* lecture : rien ne doit être écrasé, c'est la page qui défile */
+body.mobile #reader > * { flex-shrink: 0; }
+/* fenêtres : le contenu ne déborde jamais de la largeur de l'écran */
+body.mobile .dialog-body, body.mobile .compose-grid { grid-template-columns: minmax(0, 1fr); min-width: 0; }
+body.mobile .compose-box, body.mobile .compose-toolbar { min-width: 0; max-width: 100%; }
+body.mobile .compose-grid .row-line > * { min-width: 0; }
+/* appui long sur un message : menu MailHub, pas la sélection de texte d'Android */
+body.mobile #main .row, body.mobile .folder, body.mobile .sb-link, body.mobile .tab { -webkit-user-select: none; user-select: none; -webkit-touch-callout: none; }

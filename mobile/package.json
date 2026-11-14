@@ -1,0 +1,28 @@
+{
+  "name": "mailhub-mobile",
+  "version": "1.0.0",
+  "private": true,
+  "description": "MailHub pour Android (Capacitor + Node.js embarqué)",
+  "scripts": {
+    "build": "node ../scripts/build-mobile.js",
+    "sync": "npm run build && npx cap sync android",
+    "apk:debug": "npm run sync && cd android && ./gradlew assembleDebug",
+    "apk:release": "npm run sync && cd android && ./gradlew assembleRelease"
+  },
+  "dependencies": {
+    "@capacitor/android": "8.6.2",
+    "@capacitor/app": "8.1.2",
+    "@capacitor/browser": "8.0.5",
+    "@capacitor/core": "8.6.2",
+    "@capacitor/filesystem": "8.1.5",
+    "@capacitor/keyboard": "8.0.6",
+    "@capacitor/local-notifications": "8.3.1",
+    "@capacitor/share": "8.0.3",
+    "@capawesome-team/capacitor-file-opener": "8.1.1",
+    "@capawesome/capacitor-nodejs": "0.3.0",
+    "capacitor-secure-storage-plugin": "0.14.2"
+  },
+  "devDependencies": {
+    "@capacitor/cli": "8.6.2"
+  }
+}

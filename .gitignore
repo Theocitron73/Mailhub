@@ -13,3 +13,4 @@ dist/
 # Système
 .DS_Store
 Thumbs.db
+mobile/www/
