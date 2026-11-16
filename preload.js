@@ -91,6 +91,11 @@ contextBridge.exposeInMainWorld('mailhub', {
     restore: (accountId, passphrase, uid) => invoke('backup:restore', accountId, passphrase, uid),
   },
 
+  transfer: {
+    start: () => invoke('transfer:start'),
+    stop: () => invoke('transfer:stop'),
+  },
+
   // envoi programmé
   scheduled: {
     list: () => invoke('scheduled:list'),
@@ -142,7 +147,7 @@ contextBridge.exposeInMainWorld('mailhub', {
 
   // événements poussés par le processus principal
   on: (channel, callback) => {
-    const allowed = ['mail:sorted', 'mail:new', 'mail:changed', 'account:status', 'app:error', 'app:closeTab', 'app:updateAvailable', 'app:updateDownloaded', 'app:open', 'mail:scheduled', 'backup:status'];
+    const allowed = ['mail:sorted', 'mail:new', 'mail:changed', 'account:status', 'app:error', 'app:closeTab', 'app:updateAvailable', 'app:updateDownloaded', 'app:open', 'mail:scheduled', 'backup:status', 'transfer:status'];
     if (!allowed.includes(channel)) return () => {};
     const listener = (_event, payload) => callback(payload);
     ipcRenderer.on(channel, listener);

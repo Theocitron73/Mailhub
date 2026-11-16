@@ -90,6 +90,20 @@ function ipc(name, ...args) {
     assert.ok(used.length > 55);
   });
 
+  await t('transfert par QR code : le moteur Android reçoit les réglages d’un ordinateur', async () => {
+    const { TransferServer } = require('../src/transfer');
+    const srv = new TransferServer();
+    const payload = { accounts: [{ email: 'qr@exemple.fr', name: 'QR', password: 'pw-qr', imap: { host: '127.0.0.1', port: 1 } }], rules: [], prefs: { theme: 'graphite' }, contacts: [] };
+    const res = await srv.start(payload, { hosts: ['127.0.0.1'], bind: '127.0.0.1' });
+    const r = await ipc('transfer:receive', res.code);
+    assert.strictEqual(r.ok, true, r.error);
+    assert.deepStrictEqual(r.data.accountsAdded, ['qr@exemple.fr']);
+    assert.strictEqual((await ipc('prefs:get')).data.theme, 'graphite');
+    assert.strictEqual((await ipc('accounts:list')).data[0].email, 'qr@exemple.fr');
+    const again = await ipc('transfer:receive', res.code); // usage unique
+    assert.strictEqual(again.ok, false);
+  });
+
   await t('les données sont écrites dans le dossier de l’application', async () => {
     assert.ok(fs.existsSync(path.join(dataDir, 'mailhub-data.json')));
   });

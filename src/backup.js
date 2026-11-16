@@ -291,6 +291,34 @@ class BackupService {
     if (this.timer.unref) this.timer.unref();
   }
 
+  // Transfert vers un autre appareil (QR code) : tous les réglages, mots de passe compris, et la
+  // configuration de sauvegarde (le nouvel appareil continue de sauvegarder sans retaper la phrase).
+  // Le tout voyage chiffré par une clé à usage unique contenue dans le QR code (src/transfer.js).
+  transferPayload() {
+    const payload = collect(this.store, { includePasswords: true });
+    const st = this.status();
+    if (st.mode === 'mailbox') {
+      try {
+        payload.backupConf = { accountEmail: st.accountEmail, includePasswords: st.includePasswords, salt: this.conf.salt, key: this._key().toString('base64') };
+      } catch (_) { /* configuration incomplète : on ne la transmet pas */ }
+    }
+    return payload;
+  }
+
+  // Réglages reçus d'un autre appareil : fusion, puis reprise de sa configuration de sauvegarde
+  receive(payload) {
+    const summary = restore(this.store, payload);
+    const bc = payload.backupConf;
+    if (bc && bc.salt && bc.key && this.conf.mode !== 'mailbox') {
+      const acc = this.store.listAccounts().find((a) => a.email.toLowerCase() === String(bc.accountEmail || '').toLowerCase());
+      if (acc) {
+        this.setConf({ mode: 'mailbox', accountId: acc.id, includePasswords: bc.includePasswords !== false, salt: bc.salt, key: this.store._encrypt(bc.key), lastHash: '', lastError: '' });
+        summary.backup = acc.email;
+      }
+    }
+    return summary;
+  }
+
   // Sauvegardes présentes dans la boîte de accountId (la plus récente d'abord)
   async find(accountId) {
     const list = await this.manager.listBackups(accountId);

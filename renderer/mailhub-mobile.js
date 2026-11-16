@@ -19,6 +19,7 @@
   const Notif = plugin('LocalNotifications');
   const App = plugin('App');
   const FileOpener = plugin('FileOpener');
+  const Scanner = plugin('BarcodeScanner');
   const VERSION = window.MAILHUB_VERSION || '0.0.0';
 
   // ---------------------------------------------------------------- événements
@@ -375,6 +376,33 @@
       saveNow: () => invoke('backup:saveNow'),
       find: (accountId) => invoke('backup:find', accountId),
       restore: (accountId, passphrase, uid) => invoke('backup:restore', accountId, passphrase, uid),
+    },
+
+    // Réglages d'un ordinateur : lecture de son QR code (lecteur de Google Play, sans accès caméra pour MailHub)
+    transfer: {
+      scan: async () => {
+        try {
+          const { available } = await Scanner.isGoogleBarcodeScannerModuleAvailable();
+          if (!available) {
+            // premier usage : Google Play installe le lecteur de QR codes (quelques secondes)
+            await new Promise((resolve, reject) => {
+              const timer = setTimeout(() => reject(new Error('Installation du lecteur de QR codes trop longue : réessayez dans un instant.')), 90000);
+              Scanner.addListener('googleBarcodeScannerModuleInstallProgress', ({ state }) => {
+                if (state === 4) { clearTimeout(timer); resolve(); } // COMPLETED
+                else if (state === 5 || state === 3) { clearTimeout(timer); reject(new Error('Le lecteur de QR codes n’a pas pu être installé (Google Play).')); }
+              });
+              Scanner.installGoogleBarcodeScannerModule().catch((e) => { clearTimeout(timer); reject(e); });
+            });
+          }
+          const { barcodes } = await Scanner.scan({ formats: ['QR_CODE'] });
+          const raw = barcodes && barcodes[0] && barcodes[0].rawValue;
+          if (!raw) return ok(null);
+          return invoke('transfer:receive', raw);
+        } catch (err) {
+          return isCancel(err) ? ok(null) : fail(err);
+        }
+      },
+      receive: (code) => invoke('transfer:receive', code),
     },
 
     scheduled: {

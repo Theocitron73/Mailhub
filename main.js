@@ -12,6 +12,8 @@ const { safeOutgoing, uniqueFileNames } = require('./src/attachment');
 const { cleanImage } = require('./src/signature');
 const { Scheduler } = require('./src/scheduler');
 const { BackupService } = require('./src/backup');
+const { TransferServer } = require('./src/transfer');
+const QRCode = require('qrcode');
 const os = require('os');
 const tb = require('./src/thunderbird');
 const { registerCommonHandlers, makeSendMail, rulesImportPreview, rulesExportData } = require('./src/handlers');
@@ -29,6 +31,7 @@ let quitting = false;
 let hintShown = false;
 let scheduler = null;
 let backupSvc = null;
+const transfer = new TransferServer({ onEvent: (state) => send('transfer:status', { state }) });
 
 // Sécurité : seuls les fichiers que l'utilisateur a choisis lui-même (fenêtre « Joindre ») peuvent être
 // lus sur le disque. Tout autre chemin transmis par l'interface est ignoré ; un fichier glissé-déposé
@@ -229,6 +232,15 @@ function registerIpc() {
   });
 
   handle('app:hide', () => { if (mainWindow) mainWindow.hide(); return true; });
+
+  // Transfert vers un téléphone : serveur temporaire sur le réseau local + QR code
+  handle('transfer:start', async () => {
+    if (!store.listAccounts().length) throw new Error('Ajoutez d’abord un compte : il n’y a rien à transférer.');
+    const res = await transfer.start(backupSvc.transferPayload());
+    const svg = await QRCode.toString(res.code, { type: 'svg', errorCorrectionLevel: 'M', margin: 1 });
+    return { svg, hosts: res.hosts, expiresAt: res.expiresAt };
+  });
+  handle('transfer:stop', () => { transfer.stop(); return true; });
 
   // Liens cliqués dans un e-mail : navigateur par défaut (http, https) ou logiciel associé (mailto)
   handle('app:openExternal', async (url) => {
@@ -537,6 +549,7 @@ function initAutoUpdater() {
 
 app.on('before-quit', () => {
   quitting = true;
+  transfer.stop();
   try { fs.rmSync(path.join(app.getPath('temp'), 'mailhub-attachments'), { recursive: true, force: true }); } catch (_) { /* ignore */ }
   if (manager) manager.disconnectAll();
 });

@@ -10,6 +10,7 @@
     "apk:release": "npm run sync && cd android && ./gradlew assembleRelease"
   },
   "dependencies": {
+    "@capacitor-mlkit/barcode-scanning": "8.2.2",
     "@capacitor/android": "8.6.2",
     "@capacitor/app": "8.1.2",
     "@capacitor/browser": "8.0.5",

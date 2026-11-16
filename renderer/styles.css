@@ -869,3 +869,11 @@ body.mobile .attachments .att-all { height: 40px; }
 .backup-state small { color: var(--ink-2); }
 .panel-inner h4.sub-h { font-size: 13px; margin: 18px 0 8px; color: var(--ink-2); font-weight: 600; }
 .welcome .welcome-hint { margin-top: 18px; font-size: 13px; color: var(--ink-2); max-width: 46ch; }
+
+/* transfert par QR code */
+.qr-box { display: grid; justify-items: center; gap: 10px; text-align: left; }
+.qr-img { width: 240px; height: 240px; background: #fff; padding: 10px; border-radius: 12px; border: 1px solid var(--line); image-rendering: pixelated; transition: opacity .2s; }
+.qr-steps { margin: 4px 0 0; padding-left: 20px; display: grid; gap: 4px; justify-self: stretch; }
+.qr-status { margin: 0; color: var(--ink-2); font-size: 13px; text-align: center; }
+.qr-warn { color: var(--ink-2); justify-self: stretch; }
+.welcome .welcome-qr { margin-top: 10px; }

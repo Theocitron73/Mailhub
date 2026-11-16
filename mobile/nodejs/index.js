@@ -20,6 +20,7 @@ const { safeOutgoing, uniqueFileNames } = require('../../src/attachment');
 const { cleanImage } = require('../../src/signature');
 const { Scheduler } = require('../../src/scheduler');
 const { BackupService } = require('../../src/backup');
+const transfer = require('../../src/transfer');
 const tb = require('../../src/thunderbird');
 const { registerCommonHandlers, makeSendMail, rulesImportPreview, rulesExportData, thunderbirdPreview } = require('../../src/handlers');
 
@@ -114,6 +115,14 @@ function registerMobileHandlers() {
   });
 
   handle('prefs:set', (patch) => store.setPrefs(patch || {}));
+
+  // Réglages d'un ordinateur, lus sur son QR code (réseau local, chiffrés par la clé du QR)
+  handle('transfer:receive', async (code) => {
+    const payload = await transfer.receive(code);
+    const summary = backupSvc.receive(payload);
+    store.listAccounts().forEach((a) => manager.startWatching(a.id));
+    return summary;
+  });
 
   // Mises à jour : dernière version publiée sur GitHub (l'APK se télécharge depuis la page de la version)
   handle('updates:check', async () => {

@@ -4457,6 +4457,85 @@ function backupSection() {
   return box;
 }
 
+
+// ------------------------------------------------- transfert ordinateur -> téléphone
+// L'ordinateur affiche un QR code (adresse sur le réseau local + clé à usage unique) ;
+// le téléphone le scanne et récupère tous les réglages, mots de passe compris, chiffrés de bout en bout.
+
+function openTransferQR() {
+  let off = null;
+  const img = h('img', { class: 'qr-img', alt: 'QR code de transfert MailHub' });
+  const status = h('p', { class: 'qr-status' }, 'Préparation…');
+  const regen = h('button', { class: 'ghost', hidden: true, on: { click: () => start() } }, 'Nouveau QR code');
+  const start = async () => {
+    regen.hidden = true;
+    img.style.opacity = '1';
+    status.textContent = 'Préparation…';
+    try {
+      const res = await call(api.transfer.start());
+      img.src = 'data:image/svg+xml;base64,' + btoa(unescape(encodeURIComponent(res.svg)));
+      status.textContent = `Valable jusqu’à ${dfDay.format(new Date(res.expiresAt))}, pour un seul téléphone · ${res.hosts[0]}`;
+    } catch (err) { status.textContent = err.message; regen.hidden = false; }
+  };
+  const dlg = openDialog({
+    title: 'Transférer vers un téléphone',
+    subtitle: 'Comptes (mots de passe compris), règles, signatures, contacts et préférences.',
+    body: h('div', { class: 'qr-box' },
+      img,
+      h('ol', { class: 'qr-steps' },
+        h('li', null, 'Installez MailHub sur le téléphone Android.'),
+        h('li', null, 'Dans MailHub sur le téléphone : « Importer depuis un ordinateur » (écran d’accueil, ou Réglages → Sauvegarde).'),
+        h('li', null, 'Scannez ce QR code. Le téléphone et l’ordinateur doivent être sur le même Wi-Fi.')),
+      status,
+      h('small', { class: 'qr-warn' }, 'Ce QR code donne accès à vos comptes : ne le montrez à personne. Si Windows demande d’autoriser MailHub sur le réseau, acceptez pour les réseaux privés.'),
+      regen),
+    onClose: () => { if (off) off(); call(api.transfer.stop()).catch(() => {}); },
+    buttons: [{ label: 'Fermer', onClick: (d) => d.close() }],
+  });
+  off = api.on('transfer:status', ({ state: st }) => {
+    if (st === 'done') {
+      dlg.close();
+      toast('Réglages transférés vers le téléphone.', { timeout: 8000 });
+    } else if (st === 'expired') {
+      img.style.opacity = '.15';
+      status.textContent = 'Ce QR code a expiré.';
+      regen.hidden = false;
+    }
+  });
+  start();
+}
+
+async function importFromComputer(btn) {
+  if (btn) btn.disabled = true;
+  try {
+    const res = await call(api.transfer.scan());
+    if (!res) return; // lecture annulée
+    const wasWelcome = state.view === 'welcome';
+    await reloadAfterRestore();
+    if (wasWelcome && state.accounts.length) { showMail(); updateTitle(); selectFolder('unified', 'INBOX'); }
+    const parts = [`${res.accountsAdded.length} ${plural(res.accountsAdded.length, 'compte', 'comptes')}`];
+    if (res.rulesAdded) parts.push(`${res.rulesAdded} ${plural(res.rulesAdded, 'règle', 'règles')}`);
+    toast(`Réglages importés : ${parts.join(', ')}.${res.backup ? ` Sauvegarde automatique dans la boîte de ${res.backup}.` : ''}`, { timeout: 9000 });
+  } catch (err) {
+    toast(err.message, { error: true, timeout: 12000 });
+  } finally {
+    if (btn) btn.disabled = false;
+  }
+}
+
+// Bouton des réglages : « afficher le QR » sur ordinateur, « scanner » sur téléphone
+function transferButton() {
+  if (api.transfer && api.transfer.start) return h('button', { class: 'ghost', on: { click: openTransferQR } }, 'Transférer vers un téléphone…');
+  if (api.transfer && api.transfer.scan) return h('button', { class: 'ghost', on: { click: (e) => importFromComputer(e.currentTarget) } }, 'Importer depuis un ordinateur (QR code)');
+  return null;
+}
+
+// Écran d'accueil du téléphone : tout récupérer depuis l'ordinateur en un scan
+function welcomeTransfer() {
+  if (!(api.transfer && api.transfer.scan)) return null;
+  return h('button', { class: 'ghost welcome-qr', on: { click: (e) => importFromComputer(e.currentTarget) } }, 'Importer depuis un ordinateur (QR code)');
+}
+
 // ------------------------------------------------------------------ téléphone
 // Tiroir latéral (comptes et dossiers), bouton « Écrire » flottant, bouton retour Android,
 // gestes sur la liste (balayer, tirer pour actualiser).
