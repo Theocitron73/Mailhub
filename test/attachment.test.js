@@ -1,6 +1,6 @@
 'use strict';
 const assert = require('assert');
-const { attachmentPreview, safeOutgoing } = require('../src/attachment');
+const { attachmentPreview, safeOutgoing, uniqueFileNames } = require('../src/attachment');
 let n = 0;
 function t(name, fn) { fn(); n++; console.log('  ok   ' + name); }
 const mk = (filename, contentType, content) => ({ filename, contentType, content: Buffer.from(content) });
@@ -52,5 +52,10 @@ t('envoi : un chemin non choisi par l’utilisateur n’est jamais lu', () => {
 });
 t('envoi : pièces jointes trop lourdes refusées', () => {
   assert.throws(() => safeOutgoing({ attachments: [{ name: 'a', path: '/a' }] }, new Set(['/a']), () => 40 * 1024 * 1024), /trop lourdes/);
+});
+t('tout enregistrer : noms de fichiers sûrs et sans doublon', () => {
+  assert.deepStrictEqual(
+    uniqueFileNames(['facture.pdf', 'Facture.pdf', 'facture.pdf', '../../etc/passwd', 'a:b?.txt', '', '.htaccess', 'sans-extension', 'sans-extension']),
+    ['facture.pdf', 'Facture (2).pdf', 'facture (3).pdf', 'passwd', 'a_b_.txt', 'piece-jointe', 'htaccess', 'sans-extension', 'sans-extension (2)']);
 });
 console.log(`\n${n} tests réussis`);

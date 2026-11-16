@@ -8,11 +8,12 @@ const http = require('http');
 const { Store } = require('./src/store');
 const { ImapManager, friendlyError } = require('./src/imap');
 const rulesio = require('./src/rulesio');
-const { attachmentPreview } = require('./src/attachment');
+const { attachmentPreview, uniqueFileNames } = require('./src/attachment');
 const { cleanImage, buildSignedMessage } = require('./src/signature');
 const tb = require('./src/thunderbird');
 const { findRule, senderRule, upsertSenderRule } = require('./src/rules');
 const { Scheduler } = require('./src/scheduler');
+const { BackupService } = require('./src/backup');
 
 const PORT = 3000;
 const HOST = '0.0.0.0';
@@ -710,6 +711,14 @@ async function handleChannel(channel, args) {
     });
   }
 
+  if (channel === 'messages:attachmentsRaw') {
+    const [accountId, folder, uid] = args;
+    const found = (demoStore.messages[accountId] || []).find((m) => m.uid === Number(uid) && m.folder === folder);
+    if (!found || !(found.attachments || []).length) throw new Error('Ce message n’a pas de pièce jointe.');
+    const names = uniqueFileNames(found.attachments.map((a) => a.filename));
+    return found.attachments.map((a, i) => ({ filename: names[i], contentType: a.contentType || 'application/octet-stream', base64: a.contentBase64 || '' }));
+  }
+
   if (channel === 'messages:send') {
     const [accountId, mail] = args;
     const acc = store.getAccount(accountId);
@@ -1124,6 +1133,15 @@ async function handleChannel(channel, args) {
     return null;
   }
 
+  // ---- sauvegarde des réglages
+  if (channel === 'backup:status') return backupSvc.status();
+  if (channel === 'backup:enable') return backupSvc.enable(args[0] || {});
+  if (channel === 'backup:update') return backupSvc.update(args[0] || {});
+  if (channel === 'backup:disable') return backupSvc.disable();
+  if (channel === 'backup:saveNow') return backupSvc.saveNow();
+  if (channel === 'backup:find') return backupSvc.find(args[0]);
+  if (channel === 'backup:restore') return backupSvc.restore(args[0], args[1], args[2]);
+
   // ---- envoi programmé
   if (channel === 'scheduled:list') return scheduler.list();
   if (channel === 'scheduled:add') {
@@ -1146,6 +1164,21 @@ async function handleChannel(channel, args) {
 
   throw new Error(`Canal inconnu : ${channel}`);
 }
+
+// Sauvegarde des réglages (démo : la « boîte mail » est le fichier de démonstration)
+const demoBackupManager = {
+  saveBackup: async (accountId, text) => {
+    demoStore.backups = demoStore.backups || {};
+    const list = (demoStore.backups[accountId] = demoStore.backups[accountId] || []);
+    list.push({ uid: (list.length ? list[list.length - 1].uid : 0) + 1, text });
+    demoStore.backups[accountId] = list.slice(-3);
+    saveDemoStore();
+  },
+  listBackups: async (accountId) => ((demoStore.backups || {})[accountId] || []).slice().reverse().map((b) => ({ uid: b.uid })),
+  readBackup: async (accountId, uid) => (((demoStore.backups || {})[accountId] || []).find((b) => b.uid === Number(uid)) || {}).text,
+};
+const backupSvc = new BackupService(store, demoBackupManager, { device: 'Démo web', notify: (kind, status) => broadcast('backup:status', { kind, status }) });
+store.onChange = () => backupSvc.schedule();
 
 const scheduler = new Scheduler(store, (accountId, mail) => handleChannel('messages:send', [accountId, mail]),
   (kind, item) => broadcast('mail:scheduled', { kind, item }));

@@ -122,6 +122,17 @@
         return { ok: true, data: { saved: false } };
       },
       attachmentData: (accountId, folder, uid, index) => invoke('messages:attachmentData', accountId, folder, uid, index),
+      // toutes les pièces jointes : un téléchargement par fichier
+      saveAllAttachments: async (accountId, folder, uid) => {
+        const res = await invoke('messages:attachmentsRaw', accountId, folder, uid);
+        if (!res.ok) return res;
+        for (const a of res.data) {
+          const bytes = Uint8Array.from(atob(a.base64), (c) => c.charCodeAt(0));
+          downloadBlob(bytes, a.filename, a.contentType);
+          await new Promise((r) => setTimeout(r, 250)); // le navigateur accepte mieux des téléchargements espacés
+        }
+        return { ok: true, data: { saved: true, count: res.data.length } };
+      },
       openAttachment: async (accountId, folder, uid, index) => {
         const res = await invoke('messages:attachmentData', accountId, folder, uid, index);
         if (!res.ok) return res;
@@ -216,6 +227,16 @@
       duplicates: (items) => invoke('rules:duplicates', items),
     },
 
+    backup: {
+      status: () => invoke('backup:status'),
+      enable: (opts) => invoke('backup:enable', opts),
+      update: (opts) => invoke('backup:update', opts),
+      disable: () => invoke('backup:disable'),
+      saveNow: () => invoke('backup:saveNow'),
+      find: (accountId) => invoke('backup:find', accountId),
+      restore: (accountId, passphrase, uid) => invoke('backup:restore', accountId, passphrase, uid),
+    },
+
     scheduled: {
       list: () => invoke('scheduled:list'),
       add: (accountId, mail, when) => invoke('scheduled:add', accountId, mail, when),
@@ -304,7 +325,7 @@
     },
 
     on: (channel, callback) => {
-      const allowed = ['mail:sorted', 'mail:new', 'mail:changed', 'account:status', 'app:error', 'app:closeTab', 'app:updateAvailable', 'app:updateDownloaded', 'app:open', 'mail:scheduled'];
+      const allowed = ['mail:sorted', 'mail:new', 'mail:changed', 'account:status', 'app:error', 'app:closeTab', 'app:updateAvailable', 'app:updateDownloaded', 'app:open', 'mail:scheduled', 'backup:status'];
       if (!allowed.includes(channel)) return () => {};
       if (!listeners.has(channel)) listeners.set(channel, new Set());
       listeners.get(channel).add(callback);

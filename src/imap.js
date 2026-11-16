@@ -105,6 +105,7 @@ function parseReplyOf(v) {
   try { return { accountId: parts[0], folder: decodeURIComponent(parts[1]), uid: Number(parts[2]) }; } catch (_) { return null; }
 }
 
+const BACKUP_FOLDER = 'MailHub-Sauvegarde';
 const MAIL_PARSE_LIMIT = 25 * 1024 * 1024; // sécurité : on n'ouvre pas de message > 25 Mo
 
 // Proton Mail Bridge (et ses semblables) écoute en local avec un certificat auto-signé.
@@ -497,6 +498,17 @@ class ImapManager extends EventEmitter {
     }, { readOnly: true });
   }
 
+  // Toutes les pièces jointes « visibles » d'un message (les images intégrées au texte sont exclues)
+  async getAllAttachments(accountId, folder, uid) {
+    return this.withMailbox(accountId, folder, async (client) => {
+      const { parsed } = await this._fetchParsed(client, uid);
+      return (parsed.attachments || [])
+        .map((a, index) => ({ a, index }))
+        .filter(({ a }) => !(a.related && a.contentId))
+        .map(({ a, index }) => ({ index, filename: a.filename || `piece-jointe-${index + 1}`, contentType: String(a.contentType || '').toLowerCase(), content: a.content }));
+    }, { readOnly: true });
+  }
+
   async setFlag(accountId, folder, uids, flag, on) {
     const imapFlag = { seen: '\\Seen', answered: '\\Answered' }[flag] || '\\Flagged';
     return this.withMailbox(accountId, folder, async (client) => {
@@ -796,6 +808,67 @@ class ImapManager extends EventEmitter {
     }, { readOnly: true });
   }
 
+  // ---- sauvegarde des réglages (dossier « MailHub-Sauvegarde » de la boîte mail) -------------
+
+  // Chemin du dossier de sauvegarde (avec le préfixe « INBOX. » des serveurs qui l'imposent) ; null s'il n'existe pas
+  async _backupFolder(accountId, { create = false } = {}) {
+    const { folders, prefix } = await this.listFolders(accountId);
+    const found = folders.find((f) => f.name === BACKUP_FOLDER || f.path === BACKUP_FOLDER || f.path === prefix + BACKUP_FOLDER);
+    if (found) return found.path;
+    if (!create) return null;
+    const res = await this.createFolder(accountId, prefix + BACKUP_FOLDER);
+    return res.path;
+  }
+
+  // Range une nouvelle sauvegarde (pièce jointe d'un message à soi-même) et ne garde que les plus récentes
+  async saveBackup(accountId, envelopeText, { keep = 3 } = {}) {
+    const acc = this.store.getAccount(accountId);
+    if (!acc) throw new Error('Compte introuvable');
+    const folder = await this._backupFolder(accountId, { create: true });
+    const raw = await new Promise((resolve, reject) => new MailComposer({
+      from: { name: 'MailHub', address: acc.email },
+      to: acc.email,
+      subject: 'MailHub — sauvegarde de vos réglages (ne pas supprimer)',
+      text: 'Ce message contient la sauvegarde chiffrée de vos réglages MailHub (comptes, règles de tri, signatures, carnet d’adresses).\n\n'
+        + 'Elle ne peut être lue qu’avec votre phrase secrète. Sur un nouvel ordinateur ou téléphone, ajoutez ce compte dans MailHub : '
+        + 'la sauvegarde sera proposée automatiquement.\n\nMailHub garde les trois dernières sauvegardes de ce dossier et supprime les plus anciennes.',
+      headers: { 'X-MailHub-Backup': '1' },
+      attachments: [{ filename: 'mailhub-sauvegarde.json', content: envelopeText, contentType: 'application/json' }],
+    }).compile().build((e, b) => (e ? reject(e) : resolve(b))));
+    const client = await this._ops(accountId);
+    await client.append(folder, raw, ['\\Seen']);
+    const uids = await this.withMailbox(accountId, folder, (c) => c.search({ all: true }, { uid: true }));
+    const old = (uids || []).sort((x, y) => x - y).slice(0, Math.max(0, (uids || []).length - keep));
+    if (old.length) {
+      try { await this.withMailbox(accountId, folder, (c) => c.messageDelete(old.join(','), { uid: true })); } catch (err) { console.error('Anciennes sauvegardes non supprimées :', err.message); }
+    }
+    return { folder };
+  }
+
+  // Sauvegardes présentes (la plus récente d'abord)
+  async listBackups(accountId) {
+    const folder = await this._backupFolder(accountId);
+    if (!folder) return [];
+    return this.withMailbox(accountId, folder, async (client) => {
+      if (!client.mailbox.exists) return [];
+      const out = [];
+      for await (const msg of client.fetch('1:*', { uid: true, internalDate: true })) out.push({ uid: msg.uid, date: isoDate(msg.internalDate) });
+      return out.sort((a, b) => b.uid - a.uid);
+    }, { readOnly: true });
+  }
+
+  // Contenu (texte) de la sauvegarde rangée dans le message uid
+  async readBackup(accountId, uid) {
+    const folder = await this._backupFolder(accountId);
+    if (!folder) throw new Error('Aucune sauvegarde MailHub dans cette boîte mail.');
+    return this.withMailbox(accountId, folder, async (client) => {
+      const { parsed } = await this._fetchParsed(client, uid);
+      const att = (parsed.attachments || []).find((a) => /\.json$/i.test(a.filename || '') || /json/i.test(a.contentType || ''));
+      if (!att) throw new Error('Sauvegarde illisible.');
+      return att.content.toString('utf8');
+    }, { readOnly: true });
+  }
+
   // ---- envoi (SMTP) ---------------------------------------------------------------------
 
   async send(accountId, mail) {
@@ -963,4 +1036,4 @@ class ImapManager extends EventEmitter {
   }
 }
 
-module.exports = { ImapManager, friendlyError };
+module.exports = { ImapManager, friendlyError, BACKUP_FOLDER };

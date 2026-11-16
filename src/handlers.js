@@ -255,6 +255,22 @@ function registerCommonHandlers(handle, ctx) {
 
   // ---- préférences
   handle('prefs:get', () => store.getPrefs());
+
+  // ---- sauvegarde des réglages dans la boîte mail (src/backup.js)
+  if (ctx.getBackup) {
+    const backup = () => ctx.getBackup();
+    handle('backup:status', () => backup().status());
+    handle('backup:enable', (opts = {}) => backup().enable(opts));
+    handle('backup:update', (opts = {}) => backup().update(opts));
+    handle('backup:disable', () => backup().disable());
+    handle('backup:saveNow', () => backup().saveNow());
+    handle('backup:find', (accountId) => backup().find(accountId));
+    handle('backup:restore', async (accountId, passphrase, uid) => {
+      const res = await backup().restore(accountId, passphrase, uid);
+      store.listAccounts().forEach((a) => manager.startWatching(a.id)); // comptes restaurés : surveillance immédiate
+      return res;
+    });
+  }
 }
 
 module.exports = { registerCommonHandlers, makeSendMail, rulesImportPreview, rulesExportData, thunderbirdPreview };

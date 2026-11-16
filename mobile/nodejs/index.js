@@ -16,9 +16,11 @@ const { app, channel } = require('bridge');
 
 const { Store } = require('../../src/store');
 const { ImapManager, friendlyError } = require('../../src/imap');
-const { safeOutgoing } = require('../../src/attachment');
+const { safeOutgoing, uniqueFileNames } = require('../../src/attachment');
 const { cleanImage } = require('../../src/signature');
 const { Scheduler } = require('../../src/scheduler');
+const { BackupService } = require('../../src/backup');
+const transfer = require('../../src/transfer');
 const tb = require('../../src/thunderbird');
 const { registerCommonHandlers, makeSendMail, rulesImportPreview, rulesExportData, thunderbirdPreview } = require('../../src/handlers');
 
@@ -30,6 +32,7 @@ let store = null;
 let manager = null;
 let scheduler = null;
 let sendMail = null;
+let backupSvc = null;
 let started = false;
 let appVersion = '0.0.0';
 
@@ -62,13 +65,22 @@ const MAX_RAW = 25 * 1024 * 1024;
 const thunderbirdFiles = new Map(); // fichiers de filtres choisis dans l'interface (nom -> texte)
 
 function registerMobileHandlers() {
-  registerCommonHandlers(handle, { store, manager, getScheduler: () => scheduler, safeMail, embedFiles, sendMail });
+  registerCommonHandlers(handle, { store, manager, getScheduler: () => scheduler, getBackup: () => backupSvc, safeMail, embedFiles, sendMail });
 
   // Pièce jointe complète, pour l'enregistrer ou l'ouvrir avec une autre application
   handle('messages:attachmentRaw', async (accountId, folder, uid, index) => {
     const att = await manager.getAttachment(accountId, folder, uid, index);
     if (att.content.length > MAX_RAW) throw new Error('Pièce jointe trop lourde pour le téléphone (25 Mo maximum).');
     return { filename: path.basename(att.filename) || 'piece-jointe', contentType: att.contentType || 'application/octet-stream', base64: att.content.toString('base64') };
+  });
+
+  // Toutes les pièces jointes d'un message (enregistrement groupé)
+  handle('messages:attachmentsRaw', async (accountId, folder, uid) => {
+    const atts = await manager.getAllAttachments(accountId, folder, uid);
+    const total = atts.reduce((n, a) => n + a.content.length, 0);
+    if (total > MAX_RAW * 2) throw new Error('Pièces jointes trop lourdes pour les enregistrer d’un coup (50 Mo maximum) : enregistrez-les une par une.');
+    const names = uniqueFileNames(atts.map((a) => a.filename));
+    return atts.map((a, i) => ({ filename: names[i], contentType: a.contentType || 'application/octet-stream', base64: a.content.toString('base64') }));
   });
 
   // Image de signature choisie dans l'interface : vérifiée ici (format, taille)
@@ -103,6 +115,14 @@ function registerMobileHandlers() {
   });
 
   handle('prefs:set', (patch) => store.setPrefs(patch || {}));
+
+  // Réglages d'un ordinateur, lus sur son QR code (réseau local, chiffrés par la clé du QR)
+  handle('transfer:receive', async (code) => {
+    const payload = await transfer.receive(code);
+    const summary = backupSvc.receive(payload);
+    store.listAccounts().forEach((a) => manager.startWatching(a.id));
+    return summary;
+  });
 
   // Mises à jour : dernière version publiée sur GitHub (l'APK se télécharge depuis la page de la version)
   handle('updates:check', async () => {
@@ -159,6 +179,9 @@ function start({ key, version } = {}) {
   store = new Store(dataDir, keystoreCipher(key));
   manager = new ImapManager(store);
   sendMail = makeSendMail(store, manager);
+  backupSvc = new BackupService(store, manager, { device: 'Téléphone Android', app: appVersion, notify: (kind, status) => emit('backup:status', { kind, status }) });
+  store.onChange = () => backupSvc.schedule();
+  backupSvc.schedule();
   registerMobileHandlers();
   wireManagerEvents();
   scheduler = new Scheduler(store, sendMail, (kind, item) => emit('mail:scheduled', { kind, item }));

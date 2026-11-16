@@ -8,9 +8,13 @@ const {
 
 const { Store } = require('./src/store');
 const { ImapManager, friendlyError } = require('./src/imap');
-const { safeOutgoing } = require('./src/attachment');
+const { safeOutgoing, uniqueFileNames } = require('./src/attachment');
 const { cleanImage } = require('./src/signature');
 const { Scheduler } = require('./src/scheduler');
+const { BackupService } = require('./src/backup');
+const { TransferServer } = require('./src/transfer');
+const QRCode = require('qrcode');
+const os = require('os');
 const tb = require('./src/thunderbird');
 const { registerCommonHandlers, makeSendMail, rulesImportPreview, rulesExportData } = require('./src/handlers');
 
@@ -26,6 +30,8 @@ let tray = null;
 let quitting = false;
 let hintShown = false;
 let scheduler = null;
+let backupSvc = null;
+const transfer = new TransferServer({ onEvent: (state) => send('transfer:status', { state }) });
 
 // Sécurité : seuls les fichiers que l'utilisateur a choisis lui-même (fenêtre « Joindre ») peuvent être
 // lus sur le disque. Tout autre chemin transmis par l'interface est ignoré ; un fichier glissé-déposé
@@ -209,7 +215,7 @@ const attachmentsTmp = () => {
 
 function registerIpc() {
   // ---- canaux communs au bureau et au téléphone (src/handlers.js)
-  registerCommonHandlers(handle, { store, manager, getScheduler: () => scheduler, safeMail, embedFiles, sendMail });
+  registerCommonHandlers(handle, { store, manager, getScheduler: () => scheduler, getBackup: () => backupSvc, safeMail, embedFiles, sendMail });
 
 
   // Ouvre une pièce jointe avec l'application associée (copie temporaire), sauf types exécutables
@@ -226,6 +232,15 @@ function registerIpc() {
   });
 
   handle('app:hide', () => { if (mainWindow) mainWindow.hide(); return true; });
+
+  // Transfert vers un téléphone : serveur temporaire sur le réseau local + QR code
+  handle('transfer:start', async () => {
+    if (!store.listAccounts().length) throw new Error('Ajoutez d’abord un compte : il n’y a rien à transférer.');
+    const res = await transfer.start(backupSvc.transferPayload());
+    const svg = await QRCode.toString(res.code, { type: 'svg', errorCorrectionLevel: 'M', margin: 1 });
+    return { svg, hosts: res.hosts, expiresAt: res.expiresAt };
+  });
+  handle('transfer:stop', () => { transfer.stop(); return true; });
 
   // Liens cliqués dans un e-mail : navigateur par défaut (http, https) ou logiciel associé (mailto)
   handle('app:openExternal', async (url) => {
@@ -244,6 +259,26 @@ function registerIpc() {
     fs.writeFileSync(filePath, att.content);
     shell.showItemInFolder(filePath);
     return { saved: true, path: filePath };
+  });
+
+  // Toutes les pièces jointes d'un message dans un dossier choisi par l'utilisateur
+  handle('messages:saveAllAttachments', async (accountId, folder, uid) => {
+    const atts = await manager.getAllAttachments(accountId, folder, uid);
+    if (!atts.length) throw new Error('Ce message n’a pas de pièce jointe.');
+    const { canceled, filePaths } = await dialog.showOpenDialog(mainWindow, {
+      title: `Enregistrer les ${atts.length} pièces jointes`,
+      buttonLabel: 'Enregistrer ici',
+      defaultPath: app.getPath('downloads'),
+      properties: ['openDirectory', 'createDirectory'],
+    });
+    if (canceled || !filePaths.length) return { saved: false };
+    const dir = filePaths[0];
+    // pas d'écrasement : un fichier déjà présent dans le dossier garde son nom, le nouveau est numéroté
+    const existing = new Set(fs.readdirSync(dir).map((f) => f.toLowerCase()));
+    const names = uniqueFileNames([...existing, ...atts.map((a) => a.filename)]).slice(existing.size);
+    atts.forEach((a, i) => fs.writeFileSync(path.join(dir, names[i]), a.content));
+    shell.showItemInFolder(path.join(dir, names[0]));
+    return { saved: true, count: atts.length, path: dir };
   });
 
   handle('messages:pickAttachments', async () => {
@@ -443,6 +478,14 @@ app.whenReady().then(() => {
   store = new Store(app.getPath('userData'), safeStorage);
   manager = new ImapManager(store);
   sendMail = makeSendMail(store, manager);
+  // Sauvegarde des réglages dans la boîte mail : automatique après chaque modification
+  backupSvc = new BackupService(store, manager, {
+    device: os.hostname() || 'Ordinateur',
+    app: app.getVersion(),
+    notify: (kind, status) => send('backup:status', { kind, status }),
+  });
+  store.onChange = () => backupSvc.schedule();
+  backupSvc.schedule(); // modifications faites avant la dernière fermeture
 
   const prefs = store.getPrefs();
   nativeTheme.themeSource = !prefs.theme || prefs.theme === 'auto' ? 'system' : (prefs.theme === 'graphite' ? 'dark' : prefs.theme);
@@ -506,6 +549,7 @@ function initAutoUpdater() {
 
 app.on('before-quit', () => {
   quitting = true;
+  transfer.stop();
   try { fs.rmSync(path.join(app.getPath('temp'), 'mailhub-attachments'), { recursive: true, force: true }); } catch (_) { /* ignore */ }
   if (manager) manager.disconnectAll();
 });
