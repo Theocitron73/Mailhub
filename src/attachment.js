@@ -53,4 +53,21 @@ function safeOutgoing(mail, allowedPaths, statSize) {
   return m;
 }
 
-module.exports = { attachmentPreview, MAX_PREVIEW, safeOutgoing, MAX_ATTACH_TOTAL };
+// Noms de fichiers pour enregistrer plusieurs pièces jointes dans un même dossier :
+// caractères interdits remplacés, doublons numérotés (« facture.pdf », « facture (2).pdf »).
+function uniqueFileNames(names) {
+  const used = new Set();
+  return names.map((raw) => {
+    let base = String(raw || '').split(/[\\/]/).pop().replace(/[:*?"<>|\u0000-\u001f]/g, '_').replace(/^\.+/, '').trim() || 'piece-jointe';
+    if (base.length > 150) base = base.slice(0, 150);
+    const dot = base.lastIndexOf('.');
+    const stem = dot > 0 ? base.slice(0, dot) : base;
+    const ext = dot > 0 ? base.slice(dot) : '';
+    let name = base;
+    for (let i = 2; used.has(name.toLowerCase()); i++) name = `${stem} (${i})${ext}`;
+    used.add(name.toLowerCase());
+    return name;
+  });
+}
+
+module.exports = { attachmentPreview, MAX_PREVIEW, safeOutgoing, MAX_ATTACH_TOTAL, uniqueFileNames };

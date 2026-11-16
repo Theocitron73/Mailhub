@@ -39,6 +39,8 @@ class Store {
     const tmp = this.file + '.tmp';
     fs.writeFileSync(tmp, JSON.stringify(this.data, null, 2), 'utf8');
     fs.renameSync(tmp, this.file);
+    // prévient la sauvegarde automatique (elle compare le contenu et ignore ce qui ne la concerne pas)
+    if (this.onChange) { try { this.onChange(); } catch (_) { /* ignore */ } }
   }
 
   encryptionAvailable() {

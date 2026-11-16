@@ -48,6 +48,7 @@ contextBridge.exposeInMainWorld('mailhub', {
     move: (accountId, folder, uids, dest) => invoke('messages:move', accountId, folder, uids, dest),
     remove: (accountId, folder, uids) => invoke('messages:remove', accountId, folder, uids),
     saveAttachment: (accountId, folder, uid, index) => invoke('messages:saveAttachment', accountId, folder, uid, index),
+    saveAllAttachments: (accountId, folder, uid) => invoke('messages:saveAllAttachments', accountId, folder, uid),
     attachmentData: (accountId, folder, uid, index) => invoke('messages:attachmentData', accountId, folder, uid, index),
     openAttachment: (accountId, folder, uid, index) => invoke('messages:openAttachment', accountId, folder, uid, index),
     send: (accountId, mail) => invoke('messages:send', accountId, mail),
@@ -77,6 +78,17 @@ contextBridge.exposeInMainWorld('mailhub', {
     export: () => invoke('rules:export'),
     importPick: () => invoke('rules:importPick'),
     duplicates: (items) => invoke('rules:duplicates', items),
+  },
+
+  // sauvegarde des réglages (boîte mail) et transfert vers un téléphone
+  backup: {
+    status: () => invoke('backup:status'),
+    enable: (opts) => invoke('backup:enable', opts),
+    update: (opts) => invoke('backup:update', opts),
+    disable: () => invoke('backup:disable'),
+    saveNow: () => invoke('backup:saveNow'),
+    find: (accountId) => invoke('backup:find', accountId),
+    restore: (accountId, passphrase, uid) => invoke('backup:restore', accountId, passphrase, uid),
   },
 
   // envoi programmé
@@ -130,7 +142,7 @@ contextBridge.exposeInMainWorld('mailhub', {
 
   // événements poussés par le processus principal
   on: (channel, callback) => {
-    const allowed = ['mail:sorted', 'mail:new', 'mail:changed', 'account:status', 'app:error', 'app:closeTab', 'app:updateAvailable', 'app:updateDownloaded', 'app:open', 'mail:scheduled'];
+    const allowed = ['mail:sorted', 'mail:new', 'mail:changed', 'account:status', 'app:error', 'app:closeTab', 'app:updateAvailable', 'app:updateDownloaded', 'app:open', 'mail:scheduled', 'backup:status'];
     if (!allowed.includes(channel)) return () => {};
     const listener = (_event, payload) => callback(payload);
     ipcRenderer.on(channel, listener);

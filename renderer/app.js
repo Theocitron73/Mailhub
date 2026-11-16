@@ -209,9 +209,14 @@ function unifiedUnseen() {
   return state.accounts.reduce((n, a) => n + unseenOf(a.id, 'INBOX'), 0);
 }
 
+const BACKUP_FOLDER = 'MailHub-Sauvegarde';
+
 async function loadFolders(accountId) {
   try {
-    state.folders[accountId] = await call(api.folders.list(accountId));
+    const info = await call(api.folders.list(accountId));
+    // le dossier de sauvegarde des réglages n'est jamais montré (MailHub s'en occupe seul)
+    info.folders = info.folders.filter((f) => f.name !== BACKUP_FOLDER && f.path !== BACKUP_FOLDER);
+    state.folders[accountId] = info;
     delete state.folderErrors[accountId];
   } catch (err) {
     state.folderErrors[accountId] = err.message;
@@ -2124,10 +2129,15 @@ function renderMailInto(reader, o, redraw) {
   }
 
   if (d.attachments.length) {
+    const total = d.attachments.reduce((n, a) => n + (a.size || 0), 0);
     reader.appendChild(h('div', { class: 'attachments' }, d.attachments.map((a) =>
       h('span', { class: 'att-chip' },
         h('button', { class: 'att-open', title: 'Ouvrir dans un onglet', on: { click: () => openAttachmentTab(m, a) } }, ico('clip', 15), a.filename, h('span', { class: 'size' }, fmtSize(a.size))),
-        h('button', { class: 'att-save', title: 'Enregistrer', 'aria-label': 'Enregistrer ' + a.filename, on: { click: () => saveAttachment(m, a) } }, ico('download', 15))))));
+        h('button', { class: 'att-save', title: 'Enregistrer', 'aria-label': 'Enregistrer ' + a.filename, on: { click: () => saveAttachment(m, a) } }, ico('download', 15)))),
+      d.attachments.length > 1
+        ? h('button', { class: 'ghost att-all', title: `Enregistrer les ${d.attachments.length} pièces jointes (${fmtSize(total)})`, on: { click: (e) => saveAllAttachments(m, e.currentTarget) } },
+          ico('download', 15), `Tout enregistrer (${d.attachments.length})`)
+        : null));
   }
 
   // bandeau de rangement
@@ -2214,6 +2224,15 @@ function wireMailLinks(frame, tip, m) {
     tip.hidden = false;
   });
   doc.addEventListener('mouseleave', () => { tip.hidden = true; });
+}
+
+async function saveAllAttachments(m, btn) {
+  if (btn) btn.disabled = true;
+  try {
+    const res = await call(api.messages.saveAllAttachments(m.accountId, m.folder, m.uid));
+    if (res.saved) toast(`${res.count} ${plural(res.count, 'pièce jointe enregistrée', 'pièces jointes enregistrées')}${res.path ? ` dans « ${res.path} »` : ''}.`);
+  } catch (err) { toast(err.message, { error: true }); }
+  if (btn) btn.disabled = false;
 }
 
 async function saveAttachment(m, a) {
@@ -3503,7 +3522,9 @@ async function renderSettingsPanel() {
           btn.textContent = 'Vérifier les mises à jour';
         }
       } } }, 'Vérifier les mises à jour')),
-    h('h3', null, 'Sauvegarde et migration'),
+    h('h3', null, 'Sauvegarde et synchronisation'),
+    backupSection(),
+    h('h4', { class: 'sub-h' }, 'Fichier de réglages'),
     h('div', { class: 'toolbar-row', style: 'align-items:center; gap:12px; margin-bottom:12px;' },
       h('button', { class: 'ghost', on: { click: async () => {
         try {
@@ -3673,7 +3694,9 @@ function renderWelcome() {
   panel.appendChild(h('div', { style: 'display:flex;height:100%' }, h('div', { class: 'welcome' },
     h('h2', null, 'Toutes vos boîtes mail, un seul tri.'),
     h('p', null, 'Ajoutez vos comptes IMAP. MailHub récupère vos dossiers existants, et apprend à ranger vos prochains messages au fil de vos choix.'),
-    h('button', { class: 'primary', on: { click: () => openAddAccount() } }, ico('plus', 16), 'Ajouter un compte'))));
+    h('button', { class: 'primary', on: { click: () => openAddAccount() } }, ico('plus', 16), 'Ajouter un compte'),
+    h('p', { class: 'welcome-hint' }, 'Vous utilisez déjà MailHub ailleurs ? Ajoutez le compte qui contient votre sauvegarde : MailHub la retrouve et restaure tous vos réglages avec votre phrase secrète.'),
+    typeof welcomeTransfer === 'function' ? welcomeTransfer() : null)));
 }
 
 // --------------------------------------------------------------- ajout de compte
@@ -3798,6 +3821,7 @@ function openAddAccount(existing) {
             await loadFolders(acc.id);
             toast(`${acc.email} est connecté.`);
             await selectFolder(state.accounts.length > 1 ? 'unified' : acc.id, 'INBOX');
+            offerRestore(acc);
           } catch (err) {
             btn.disabled = false;
             btn.textContent = 'Se connecter';
@@ -4243,6 +4267,195 @@ window.addEventListener('unhandledrejection', (e) => {
   toast(`Erreur : ${(e.reason && e.reason.message) || e.reason}`, { error: true });
 });
 
+
+
+// ------------------------------------------------------- sauvegarde des réglages
+// Les réglages (comptes, règles, signatures, carnet, préférences) sont sauvegardés, chiffrés avec une
+// phrase secrète, dans un dossier caché de l'un des comptes mail ; ou restent sur cet appareil seulement.
+
+const dfBackup = new Intl.DateTimeFormat('fr-FR', { dateStyle: 'medium', timeStyle: 'short' });
+const fmtBackupDate = (iso) => { try { return dfBackup.format(new Date(iso)); } catch (_) { return iso || ''; } };
+
+function accountSelect(selected) {
+  const sel = h('select', null, state.accounts.map((a) => h('option', { value: a.id }, `${a.name} <${a.email}>`)));
+  if (selected) sel.value = selected;
+  return sel;
+}
+
+function passphraseFields({ confirm = true } = {}) {
+  const pass = h('input', { type: 'password', autocomplete: 'new-password', placeholder: '8 caractères minimum', spellcheck: 'false' });
+  const pass2 = confirm ? h('input', { type: 'password', autocomplete: 'new-password', placeholder: 'La même, une seconde fois', spellcheck: 'false' }) : null;
+  const show = h('input', { type: 'checkbox' });
+  show.addEventListener('change', () => { [pass, pass2].filter(Boolean).forEach((i) => { i.type = show.checked ? 'text' : 'password'; }); });
+  const el = h('div', { style: 'display:grid;gap:12px' },
+    h('div', { class: 'field' }, h('label', null, 'Phrase secrète'), pass),
+    pass2 ? h('div', { class: 'field' }, h('label', null, 'Confirmez la phrase secrète'), pass2) : null,
+    h('label', { class: 'check' }, show, h('span', null, 'Afficher')));
+  return {
+    el, input: pass,
+    check() {
+      if (pass.value.length < 8) return 'La phrase secrète doit faire au moins 8 caractères.';
+      if (pass2 && pass.value !== pass2.value) return 'Les deux phrases secrètes ne sont pas identiques.';
+      return '';
+    },
+  };
+}
+
+function openBackupEnable(onDone) {
+  if (!state.accounts.length) { toast('Ajoutez d’abord un compte.', { error: true }); return; }
+  const acc = accountSelect(state.accounts[0].id);
+  const pp = passphraseFields();
+  const withPw = h('input', { type: 'checkbox', checked: true });
+  openDialog({
+    title: 'Sauvegarder dans ma boîte mail',
+    subtitle: 'Vos réglages seront retrouvés automatiquement sur un autre ordinateur ou téléphone.',
+    body: [
+      h('div', { class: 'field' }, h('label', null, 'Compte qui garde la sauvegarde'), acc,
+        h('small', null, 'Un dossier « MailHub-Sauvegarde » y est créé ; MailHub le masque dans la liste des dossiers.')),
+      pp.el,
+      h('label', { class: 'check' }, withPw, h('span', null, 'Inclure les mots de passe des comptes (rien à retaper sur un nouvel appareil)')),
+      h('div', { class: 'notice' }, 'Notez bien cette phrase secrète : la sauvegarde est chiffrée avec elle, et personne (ni votre hébergeur mail, ni MailHub) ne peut la retrouver si vous l’oubliez.'),
+    ],
+    buttons: [
+      { label: 'Annuler', onClick: (d) => d.close() },
+      { label: 'Activer et sauvegarder', kind: 'primary', onClick: async (d, btn) => {
+          const err = pp.check();
+          if (err) { d.error(err); return; }
+          btn.disabled = true;
+          btn.textContent = 'Sauvegarde…';
+          try {
+            await call(api.backup.enable({ accountId: acc.value, passphrase: pp.input.value, includePasswords: withPw.checked }));
+            d.close();
+            toast('Réglages sauvegardés dans votre boîte mail. Les prochaines modifications le seront automatiquement.');
+            if (onDone) onDone();
+          } catch (e) { btn.disabled = false; btn.textContent = 'Activer et sauvegarder'; d.error(e.message); }
+        } },
+    ],
+  });
+  pp.input.focus();
+}
+
+// Restauration : sauvegardes trouvées dans la boîte du compte, puis phrase secrète
+async function openBackupRestore(accountId, found) {
+  let list = found;
+  if (!list) {
+    try { list = await call(api.backup.find(accountId)); } catch (err) { toast(err.message, { error: true }); return; }
+  }
+  const acc = accountById(accountId);
+  if (!list.length) { toast(`Aucune sauvegarde MailHub dans la boîte de ${acc ? acc.email : 'ce compte'}.`, { error: true }); return; }
+  const which = h('select', null, list.map((b, i) => h('option', { value: b.uid }, `${fmtBackupDate(b.createdAt)} · ${b.device || 'appareil inconnu'}${i === 0 ? ' (la plus récente)' : ''}`)));
+  const pp = passphraseFields({ confirm: false });
+  openDialog({
+    title: 'Restaurer vos réglages',
+    subtitle: `Sauvegarde trouvée dans la boîte de ${acc ? acc.email : ''}.`,
+    body: [
+      h('div', { class: 'field' }, h('label', null, 'Sauvegarde'), which),
+      pp.el,
+      h('p', { class: 'lead', style: 'margin:0' }, 'Les comptes, règles, signatures, contacts et préférences de la sauvegarde sont ajoutés à ce que vous avez déjà ; rien n’est supprimé.'),
+    ],
+    buttons: [
+      { label: 'Plus tard', onClick: (d) => d.close() },
+      { label: 'Restaurer', kind: 'primary', onClick: async (d, btn) => {
+          if (!pp.input.value) { d.error('Saisissez votre phrase secrète.'); return; }
+          btn.disabled = true;
+          btn.textContent = 'Restauration…';
+          try {
+            const res = await call(api.backup.restore(accountId, pp.input.value, Number(which.value)));
+            d.close();
+            await reloadAfterRestore();
+            const parts = [];
+            if (res.accountsAdded.length) parts.push(`${res.accountsAdded.length} ${plural(res.accountsAdded.length, 'compte ajouté', 'comptes ajoutés')}`);
+            if (res.rulesAdded) parts.push(`${res.rulesAdded} ${plural(res.rulesAdded, 'règle', 'règles')}`);
+            toast(`Réglages restaurés${parts.length ? ' : ' + parts.join(', ') : ''}. Les prochaines modifications seront sauvegardées au même endroit.`, { timeout: 9000 });
+            if (res.needPassword.length) toast(`Mot de passe à saisir pour : ${res.needPassword.join(', ')} (Réglages → Modifier…).`, { error: true, timeout: 15000 });
+          } catch (e) { btn.disabled = false; btn.textContent = 'Restaurer'; d.error(e.message); }
+        } },
+    ],
+  });
+  pp.input.focus();
+}
+
+async function reloadAfterRestore() {
+  try {
+    state.prefs = await call(api.prefs.get());
+    state.accounts = await call(api.accounts.list());
+    state.rules = await call(api.rules.list());
+    state.contacts = await call(api.contacts.list());
+  } catch (err) { toast(err.message, { error: true }); }
+  applyTheme();
+  await Promise.all(state.accounts.map((a) => loadFolders(a.id)));
+  renderSidebar();
+  if (state.view === 'settings') renderSettingsPanel();
+  else if (state.view === 'mail') loadMessages({ silent: true });
+}
+
+// Après l'ajout d'un compte : une sauvegarde MailHub s'y trouve ? On propose de tout restaurer.
+async function offerRestore(acc) {
+  try {
+    const st = await call(api.backup.status());
+    if (st.mode === 'mailbox') return; // déjà synchronisé
+    const found = await call(api.backup.find(acc.id));
+    if (found.length) openBackupRestore(acc.id, found);
+  } catch (_) { /* pas de sauvegarde, ou boîte injoignable : rien à proposer */ }
+}
+
+function backupSection() {
+  const box = h('div', { class: 'backup-box' }, h('div', { class: 'loading' }, 'Chargement…'));
+  const draw = async () => {
+    let st;
+    try { st = await call(api.backup.status()); } catch (err) { clear(box); box.appendChild(h('div', { class: 'notice' }, err.message)); return; }
+    clear(box);
+    const mailbox = st.mode === 'mailbox';
+    box.append(
+      h('div', { class: 'seg' },
+        h('button', { class: mailbox ? '' : 'on', on: { click: async () => {
+          if (!mailbox) return;
+          if (!(await confirmDialog({ title: 'Garder les réglages sur cet appareil seulement ?', body: 'La sauvegarde automatique s’arrête. Les sauvegardes déjà faites restent dans votre boîte mail (vous pouvez supprimer le dossier « MailHub-Sauvegarde » depuis votre messagerie).', confirm: 'Arrêter la sauvegarde' }))) return;
+          try { await call(api.backup.disable()); toast('Réglages gardés sur cet appareil uniquement.'); } catch (err) { toast(err.message, { error: true }); }
+          draw();
+        } } }, 'Sur cet appareil uniquement'),
+        h('button', { class: mailbox ? 'on' : '', on: { click: () => { if (!mailbox) openBackupEnable(draw); } } }, 'Dans ma boîte mail')),
+      mailbox
+        ? h('div', { class: 'backup-state' },
+          h('p', { style: 'margin:0' }, ico('check', 15), ` Sauvegarde automatique dans la boîte de ${st.accountEmail}${st.includePasswords ? ', mots de passe compris' : ', sans les mots de passe'}.`),
+          h('small', null, st.lastSaved ? `Dernière sauvegarde : ${fmtBackupDate(st.lastSaved)}` : 'Pas encore de sauvegarde.'),
+          st.lastError ? h('div', { class: 'notice' }, 'Dernière tentative en échec : ' + st.lastError) : null)
+        : h('p', { class: 'lead', style: 'margin:8px 0 0' }, 'Vos réglages ne quittent pas cet appareil. Activez « Dans ma boîte mail » pour les retrouver automatiquement sur un autre ordinateur ou téléphone (sauvegarde chiffrée par une phrase secrète).'),
+      h('div', { class: 'toolbar-row', style: 'margin-top:10px' },
+        mailbox ? h('button', { class: 'ghost', on: { click: async (e) => {
+          e.currentTarget.disabled = true;
+          try { await call(api.backup.saveNow()); toast('Réglages sauvegardés.'); } catch (err) { toast(err.message, { error: true }); }
+          draw();
+        } } }, 'Sauvegarder maintenant') : null,
+        mailbox ? h('button', { class: 'ghost', on: { click: () => {
+          const acc = accountSelect(st.accountId);
+          const withPw = h('input', { type: 'checkbox', checked: st.includePasswords });
+          openDialog({
+            title: 'Options de sauvegarde',
+            body: [h('div', { class: 'field' }, h('label', null, 'Compte qui garde la sauvegarde'), acc),
+              h('label', { class: 'check' }, withPw, h('span', null, 'Inclure les mots de passe des comptes'))],
+            buttons: [
+              { label: 'Annuler', onClick: (d) => d.close() },
+              { label: 'Enregistrer', kind: 'primary', onClick: async (d) => {
+                  try { await call(api.backup.update({ accountId: acc.value, includePasswords: withPw.checked })); d.close(); toast('Options enregistrées, réglages sauvegardés.'); draw(); } catch (err) { d.error(err.message); }
+                } },
+            ],
+          });
+        } } }, 'Options…') : null,
+        state.accounts.length ? h('button', { class: 'ghost', on: { click: () => {
+          if (state.accounts.length === 1) { openBackupRestore(state.accounts[0].id); return; }
+          const acc = accountSelect();
+          openDialog({
+            title: 'Restaurer une sauvegarde',
+            body: h('div', { class: 'field' }, h('label', null, 'Compte qui contient la sauvegarde'), acc),
+            buttons: [{ label: 'Annuler', onClick: (d) => d.close() }, { label: 'Chercher', kind: 'primary', onClick: (d) => { d.close(); openBackupRestore(acc.value); } }],
+          });
+        } } }, 'Restaurer une sauvegarde…') : null,
+        typeof transferButton === 'function' ? transferButton() : null));
+  };
+  draw();
+  return box;
+}
 
 // ------------------------------------------------------------------ téléphone
 // Tiroir latéral (comptes et dossiers), bouton « Écrire » flottant, bouton retour Android,

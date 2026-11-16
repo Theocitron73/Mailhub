@@ -250,6 +250,18 @@
         if (!r.ok) return r;
         try { return ok({ saved: await shareFile(r.data.filename, r.data.base64, null, 'Enregistrer la pièce jointe') }); } catch (err) { return fail(err); }
       },
+      saveAllAttachments: async (accountId, folder, uid) => {
+        const r = await invoke('messages:attachmentsRaw', accountId, folder, uid);
+        if (!r.ok) return r;
+        try {
+          const files = [];
+          for (const a of r.data) files.push(await writeCache(a.filename, a.base64));
+          await Share.share({ title: 'Pièces jointes', files, dialogTitle: `Enregistrer les ${files.length} pièces jointes` });
+          return ok({ saved: true, count: files.length });
+        } catch (err) {
+          return isCancel(err) ? ok({ saved: false }) : fail(err);
+        }
+      },
       openAttachment: async (accountId, folder, uid, index) => {
         const r = await invoke('messages:attachmentRaw', accountId, folder, uid, index);
         if (!r.ok) return r;
@@ -355,6 +367,16 @@
       },
     },
 
+    backup: {
+      status: () => invoke('backup:status'),
+      enable: (opts) => invoke('backup:enable', opts),
+      update: (opts) => invoke('backup:update', opts),
+      disable: () => invoke('backup:disable'),
+      saveNow: () => invoke('backup:saveNow'),
+      find: (accountId) => invoke('backup:find', accountId),
+      restore: (accountId, passphrase, uid) => invoke('backup:restore', accountId, passphrase, uid),
+    },
+
     scheduled: {
       list: () => invoke('scheduled:list'),
       add: (accountId, mail, when) => invoke('scheduled:add', accountId, mail, when),
@@ -373,7 +395,7 @@
     },
 
     on: (channel, callback) => {
-      const allowed = ['mail:sorted', 'mail:new', 'mail:changed', 'account:status', 'app:error', 'app:closeTab', 'app:updateAvailable', 'app:updateDownloaded', 'app:updateApk', 'app:open', 'mail:scheduled'];
+      const allowed = ['mail:sorted', 'mail:new', 'mail:changed', 'account:status', 'app:error', 'app:closeTab', 'app:updateAvailable', 'app:updateDownloaded', 'app:updateApk', 'app:open', 'mail:scheduled', 'backup:status'];
       if (!allowed.includes(channel)) return () => {};
       if (!listeners.has(channel)) listeners.set(channel, new Set());
       listeners.get(channel).add(callback);
