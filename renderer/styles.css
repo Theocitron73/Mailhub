@@ -877,3 +877,35 @@ body.mobile .attachments .att-all { height: 40px; }
 .qr-status { margin: 0; color: var(--ink-2); font-size: 13px; text-align: center; }
 .qr-warn { color: var(--ink-2); justify-self: stretch; }
 .welcome .welcome-qr { margin-top: 10px; }
+
+/* destinataires en pastilles (À, Cc, Cci) */
+.rcpt-field {
+  position: relative; display: flex; flex-wrap: wrap; align-items: center; gap: 5px;
+  min-height: 36px; padding: 4px 6px; box-sizing: border-box; min-width: 0;
+  border: 1px solid var(--line); border-radius: 8px; background: var(--surface); cursor: text;
+}
+.rcpt-field:focus-within { border-color: var(--accent); box-shadow: 0 0 0 3px var(--accent-soft); }
+.rcpt-field .rcpt-input { flex: 1 1 120px; min-width: 80px; border: 0; outline: 0; background: transparent; padding: 4px 2px; height: 26px; box-shadow: none; }
+.rcpt-field .rcpt-input:focus { box-shadow: none; outline: 0; }
+.rcpt-chip {
+  display: inline-flex; align-items: center; gap: 6px; max-width: 100%; min-width: 0;
+  height: 26px; padding: 0 4px 0 10px; border-radius: 13px;
+  border: 1px solid color-mix(in srgb, var(--accent) 38%, var(--line));
+  background: color-mix(in srgb, var(--accent-soft) 70%, var(--surface));
+  color: var(--ink); font-size: 13px; line-height: 1; cursor: default; user-select: none;
+  transition: border-color .12s, background .12s;
+}
+.rcpt-chip:hover { border-color: var(--accent); }
+.rcpt-chip .rcpt-name { font-weight: 550; overflow: hidden; text-overflow: ellipsis; white-space: nowrap; }
+.rcpt-chip .rcpt-addr { display: none; color: var(--ink-2); font-size: 12px; overflow: hidden; text-overflow: ellipsis; white-space: nowrap; }
+.rcpt-chip.show-addr .rcpt-addr { display: inline; }
+.rcpt-chip .rcpt-x {
+  display: inline-grid; place-items: center; width: 18px; height: 18px; padding: 0; flex: none;
+  border: 0; border-radius: 50%; background: transparent; color: var(--ink-2); cursor: pointer;
+}
+.rcpt-chip .rcpt-x:hover { background: color-mix(in srgb, var(--accent) 18%, transparent); color: var(--ink); }
+.rcpt-chip.invalid { border-color: var(--danger); background: color-mix(in srgb, var(--danger) 10%, var(--surface)); color: var(--danger); }
+.rcpt-field .suggest { left: 0; }
+body.mobile .rcpt-chip { height: 30px; border-radius: 15px; font-size: 14px; }
+body.mobile .rcpt-chip .rcpt-x { width: 24px; height: 24px; }
+body.mobile .rcpt-field .rcpt-input { font-size: 16px; }

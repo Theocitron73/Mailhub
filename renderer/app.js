@@ -2623,7 +2623,7 @@ async function setThreads(on) {
 }
 
 // Autocomplétion des destinataires à partir du carnet d'adresses
-function attachAutocomplete(input) {
+function attachAutocomplete(input, { taken: takenFn, onChoose } = {}) {
   const box = h('div', { class: 'suggest', hidden: true, role: 'listbox' });
   input.parentNode.appendChild(box);
   let items = [];
@@ -2634,7 +2634,7 @@ function attachAutocomplete(input) {
   function show() {
     const q = norm(input.value.slice(tokenStart(), input.selectionStart).trim());
     if (q.length < 1) { hide(); return; }
-    const taken = new Set(input.value.toLowerCase().match(/[^\s,;<>"]+@[^\s,;<>"]+/g) || []);
+    const taken = new Set([...(input.value.toLowerCase().match(/[^\s,;<>"]+@[^\s,;<>"]+/g) || []), ...(takenFn ? takenFn() : [])]);
     const scored = [];
     for (const c of state.contacts) {
       if (taken.has(c.email)) continue;
@@ -2660,6 +2660,7 @@ function attachAutocomplete(input) {
     box.hidden = false;
   }
   function choose(c) {
+    if (onChoose) { hide(); onChoose(c); return; } // champ à pastilles : la suggestion devient une pastille
     const start = tokenStart();
     const before = input.value.slice(0, start).replace(/\s*$/, '');
     const after = input.value.slice(input.selectionStart).replace(/^\s*[,;]?\s*/, '');
@@ -2680,6 +2681,152 @@ function attachAutocomplete(input) {
   }, true);
 }
 
+
+// ---- destinataires en « pastilles » ----
+const EMAIL_RE = /^[^\s@<>,;"]+@[^\s@<>,;"]+\.[^\s@<>,;"]+$/;
+
+// « "Alice D." <alice@x.fr>, bob@y.fr; Carol <c@z.fr> » -> [{ name, address }]
+// (les virgules à l'intérieur des guillemets ou des chevrons ne séparent pas)
+function parseAddressList(text) {
+  const parts = [];
+  let cur = '';
+  let quote = false;
+  let angle = false;
+  for (const ch of String(text || '')) {
+    if (ch === '"' && !angle) quote = !quote;
+    else if (ch === '<' && !quote) angle = true;
+    else if (ch === '>' && !quote) angle = false;
+    if ((ch === ',' || ch === ';' || ch === '\n') && !quote && !angle) { parts.push(cur); cur = ''; } else cur += ch;
+  }
+  parts.push(cur);
+  return parts.map((p) => p.trim()).filter(Boolean).map(parseAddress);
+}
+function parseAddress(token) {
+  const t = String(token || '').trim();
+  const m = t.match(/^(.*?)<\s*([^<>]+?)\s*>\s*$/);
+  if (m) return { name: m[1].replace(/^\s*"|"\s*$/g, '').replace(/\\"/g, '"').trim(), address: m[2].trim() };
+  return { name: '', address: t.replace(/^mailto:/i, '') };
+}
+
+/**
+ * Champ de destinataires : chaque adresse devient une pastille (nom, adresse au survol, croix).
+ * Il se comporte comme un champ texte pour le reste de la rédaction : .value (lecture/écriture,
+ * adresses séparées par des virgules), .focus(), événement « input » à chaque changement.
+ */
+function recipientField(initial, { placeholder = '' } = {}) {
+  const chips = [];
+  const box = h('div', { class: 'rcpt-field' });
+  const input = h('input', { type: 'text', class: 'rcpt-input', spellcheck: 'false', autocomplete: 'off', placeholder });
+  box.appendChild(input);
+  const changed = () => box.dispatchEvent(new Event('input', { bubbles: true }));
+  const sync = () => { input.placeholder = chips.length ? '' : placeholder; box.classList.toggle('has-chips', chips.length > 0); };
+
+  const draw = () => {
+    box.querySelectorAll('.rcpt-chip').forEach((el) => el.remove());
+    chips.forEach((c, i) => {
+      const valid = EMAIL_RE.test(c.address);
+      const chip = h('span', {
+        class: 'rcpt-chip' + (valid ? '' : ' invalid'), title: valid ? (c.name ? `${c.name} <${c.address}>` : c.address) : `Adresse invalide : ${c.address}`,
+        tabindex: '-1',
+        on: {
+          click: (e) => { e.stopPropagation(); chip.classList.toggle('show-addr'); }, // sur téléphone : voir l'adresse complète
+          dblclick: (e) => { // modifier : la pastille redevient du texte
+            e.stopPropagation();
+            commit();
+            chips.splice(i, 1);
+            input.value = addrLabel(c) || c.address;
+            draw(); changed(); input.focus();
+          },
+        },
+      },
+      h('span', { class: 'rcpt-name' }, c.name || c.address),
+      c.name ? h('span', { class: 'rcpt-addr' }, c.address) : null,
+      h('button', { type: 'button', class: 'rcpt-x', tabindex: '-1', 'aria-label': `Retirer ${c.name || c.address}`, title: 'Retirer',
+        on: { mousedown: (e) => e.preventDefault(), click: (e) => { e.stopPropagation(); chips.splice(i, 1); draw(); changed(); input.focus(); } } }, ico('close', 12)));
+      box.insertBefore(chip, input);
+    });
+    sync();
+  };
+
+  const add = (list) => {
+    const have = new Set(chips.map((c) => c.address.toLowerCase()));
+    let n = 0;
+    for (const a of list) {
+      if (!a.address || have.has(a.address.toLowerCase())) continue;
+      have.add(a.address.toLowerCase());
+      chips.push(a);
+      n++;
+    }
+    return n;
+  };
+  // Le texte saisi devient pastille(s)
+  const commit = () => {
+    const text = input.value.trim();
+    if (!text) return false;
+    input.value = '';
+    add(parseAddressList(text));
+    draw();
+    changed();
+    return true;
+  };
+
+  input.addEventListener('input', () => {
+    // virgule, point-virgule ou collage de plusieurs adresses : tout ce qui précède le dernier séparateur devient pastille
+    const v = input.value;
+    const last = Math.max(v.lastIndexOf(','), v.lastIndexOf(';'), v.lastIndexOf('\n'));
+    if (last >= 0) {
+      const done = v.slice(0, last);
+      const rest = v.slice(last + 1).replace(/^\s+/, '');
+      if (parseAddressList(done).length) {
+        add(parseAddressList(done));
+        input.value = rest;
+        draw();
+      }
+    }
+  });
+  input.addEventListener('keydown', (e) => {
+    if (e.defaultPrevented) return; // l'autocomplétion a déjà traité la touche
+    if ((e.key === 'Enter' || (e.key === 'Tab' && !e.shiftKey)) && input.value.trim()) {
+      if (e.key === 'Enter') e.preventDefault();
+      commit();
+    } else if (e.key === 'Backspace' && !input.value && chips.length) {
+      e.preventDefault();
+      chips.pop();
+      draw();
+      changed();
+    }
+  });
+  input.addEventListener('blur', () => setTimeout(() => { if (document.activeElement !== input) commit(); }, 150));
+  box.addEventListener('mousedown', (e) => { if (e.target === box) { e.preventDefault(); input.focus(); } });
+
+  Object.defineProperty(box, 'value', {
+    get: () => [...chips.map((c) => addrLabel(c) || c.address), input.value.trim()].filter(Boolean).join(', '),
+    set: (v) => { chips.length = 0; input.value = ''; add(parseAddressList(v)); draw(); },
+  });
+  box.focus = () => input.focus();
+  box.input = input;
+  box.commit = commit;
+  box.addresses = () => chips.map((c) => c.address.toLowerCase());
+  // adresses non valides (pastilles en rouge ou texte en cours de saisie)
+  box.invalid = () => [...chips, ...parseAddressList(input.value)].filter((c) => !EMAIL_RE.test(c.address)).map((c) => c.address);
+  // others() : adresses déjà présentes dans les autres champs (À, Cc, Cci), jamais reproposées
+  box.attachSuggestions = (others = () => []) => attachAutocomplete(input, {
+    taken: () => [...box.addresses(), ...others()],
+    onChoose: (c) => {
+      // retire ce qui était en train d'être tapé et ajoute le contact choisi
+      const v = input.value;
+      const start = Math.max(v.lastIndexOf(','), v.lastIndexOf(';')) + 1;
+      input.value = v.slice(0, start);
+      add([{ name: c.name || '', address: c.email }]);
+      draw();
+      changed();
+      input.focus();
+    },
+  });
+  box.value = initial || '';
+  return box;
+}
+
 const SIG_DELIM = '\n\n-- \n';
 const SIG_PLACEHOLDER = '(images de la signature)'; // remplacé par les images à l'envoi
 const sigBlock = (sig) => {
@@ -2697,9 +2844,9 @@ function openCompose(init = {}) {
   const defaultAcc = init.accountId || (!['unified', 'favorites'].includes(state.current.accountId) ? state.current.accountId : state.accounts[0].id);
   const from = h('select', null, state.accounts.map((a) => h('option', { value: a.id }, `${a.name} <${a.email}>`)));
   from.value = defaultAcc;
-  const to = h('input', { type: 'text', value: init.to || '', placeholder: 'destinataire@exemple.com', spellcheck: 'false', autocomplete: 'off' });
-  const cc = h('input', { type: 'text', value: init.cc || '', spellcheck: 'false', autocomplete: 'off' });
-  const bcc = h('input', { type: 'text', value: init.bcc || '', spellcheck: 'false', autocomplete: 'off', placeholder: 'Copie cachée (facultatif)' });
+  const to = recipientField(init.to, { placeholder: 'destinataire@exemple.com' });
+  const cc = recipientField(init.cc);
+  const bcc = recipientField(init.bcc, { placeholder: 'Copie cachée (facultatif)' });
   const subject = h('input', { type: 'text', value: init.subject || '' });
   const bccRow = h('div', { class: 'row-line', hidden: !init.bcc }, h('label', null, 'Cci'), bcc);
   const bccToggle = h('button', { type: 'button', class: 'link-btn', hidden: !!init.bcc, title: 'Ajouter des destinataires en copie cachée',
@@ -3072,6 +3219,16 @@ function openCompose(init = {}) {
   };
 
   const hasRecipient = () => !!(to.value.trim() || cc.value.trim() || bcc.value.trim());
+  // les adresses en cours de saisie deviennent des pastilles ; une adresse invalide bloque l'envoi
+  const checkRecipients = (d) => {
+    [to, cc, bcc].forEach((f) => f.commit());
+    const bad = [...to.invalid(), ...cc.invalid(), ...bcc.invalid()];
+    if (bad.length) {
+      d.error(`${plural(bad.length, 'Adresse invalide', 'Adresses invalides')} : ${bad.join(', ')}. Corrigez-la (double-clic sur la pastille) ou retirez-la.`);
+      return false;
+    }
+    return true;
+  };
   // De quoi rouvrir la rédaction à l'identique (envoi annulé ou en échec)
   const snapshot = (mail, acc) => ({
     kind: init.kind, keepBody: true, accountId: acc,
@@ -3089,6 +3246,7 @@ function openCompose(init = {}) {
 
   const sendNow = async (d, btn) => {
     if (!hasRecipient()) { d.error('Indiquez au moins un destinataire.'); return; }
+    if (!checkRecipients(d)) return;
     if (btn) btn.disabled = true;
     d.error('');
     closed = true; // plus de sauvegarde automatique pendant l'envoi
@@ -3127,6 +3285,7 @@ function openCompose(init = {}) {
   // Envoi programmé : le message part à la date choisie, même si la fenêtre est fermée
   const sendLater = async (d, btn) => {
     if (!hasRecipient()) { d.error('Indiquez au moins un destinataire.'); return; }
+    if (!checkRecipients(d)) return;
     const when = await pickSendTime();
     if (!when) return;
     btn.disabled = true;
@@ -3233,9 +3392,7 @@ function openCompose(init = {}) {
     toast(`${dtFiles.length} ${plural(dtFiles.length, 'fichier ajouté', 'fichiers ajoutés')} en pièce jointe.`);
   });
 
-  attachAutocomplete(to);
-  attachAutocomplete(cc);
-  attachAutocomplete(bcc);
+  [to, cc, bcc].forEach((f) => f.attachSuggestions(() => [to, cc, bcc].filter((x) => x !== f).flatMap((x) => x.addresses())));
   [to, cc, bcc, subject].forEach((el) => el.addEventListener('input', markDirty));
   editor.addEventListener('input', markDirty);
   // Ctrl/Cmd+Entrée : envoyer ; Ctrl/Cmd+S : enregistrer le brouillon
