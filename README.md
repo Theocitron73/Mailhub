@@ -39,6 +39,7 @@ automatiquement les nouveaux messages dans vos dossiers.
 - **Brouillons** : enregistrement manuel (`Ctrl/Cmd+S` ou bouton) et **automatique toutes les 30 secondes** ; chaque enregistrement remplace la version précédente (pas de doublons). Dans « Brouillons », un double-clic (ou `Entrée`, ou « Continuer l'écriture ») rouvre le brouillon avec ses destinataires, sa mise en forme et ses pièces jointes ; il est supprimé une fois envoyé. Échap ou un clic à côté de la fenêtre ne ferment plus un message sans demander.
 - **Transfert avec pièces jointes** : les pièces jointes d'origine sont reprises (retirables une à une).
 - **Copie cachée (Cci)** dans la rédaction.
+- **Destinataires en pastilles** (À, Cc, Cci) : chaque adresse devient une pastille arrondie (nom de la personne, adresse au survol ou à l'appui), créée par une suggestion du carnet, une virgule, un point-virgule, Entrée, Tab ou en quittant le champ ; un collage de plusieurs adresses donne plusieurs pastilles. Croix ou Retour arrière pour retirer, double-clic pour modifier ; une adresse invalide apparaît en rouge et bloque l'envoi.
 - **Tout enregistrer** : un bouton enregistre d'un coup toutes les pièces jointes d'un message (dossier au choix sur ordinateur, partage Android sur le téléphone ; aucun fichier existant n'est écrasé).
 - **Sauvegarde et synchronisation des réglages** (Réglages → Sauvegarde et synchronisation) :
   - **Sur cet appareil uniquement** (par défaut) : rien ne quitte l'appareil ;
